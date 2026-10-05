@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Gold Copy Trader</title>
+  <style>
+    *{box-sizing:border-box}body{margin:0;background:#090b0f;color:#f6f7f9;font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}a{color:inherit}.wrap{max-width:1320px;margin:0 auto;padding:28px}.top{display:flex;justify-content:space-between;gap:18px;align-items:flex-start;margin-bottom:24px}.eyebrow{font-size:12px;letter-spacing:.15em;text-transform:uppercase;color:#89909b}.title{font-size:30px;font-weight:750;letter-spacing:-.04em;margin:5px 0}.sub{color:#9299a5;font-size:14px}.pill{display:inline-flex;align-items:center;gap:8px;padding:8px 12px;border:1px solid #252a33;border-radius:999px;background:#11141a;font-size:13px}.dot{width:8px;height:8px;border-radius:50%;background:#777}.dot.on{background:#35d07f;box-shadow:0 0 0 4px rgba(53,208,127,.12)}.grid{display:grid;grid-template-columns:repeat(12,1fr);gap:16px}.card{background:#11141a;border:1px solid #242933;border-radius:18px;padding:18px;min-width:0}.stat{grid-column:span 3}.wide{grid-column:span 8}.side{grid-column:span 4}.full{grid-column:1/-1}.label{font-size:12px;color:#868e9a;text-transform:uppercase;letter-spacing:.1em}.value{font-size:28px;font-weight:720;letter-spacing:-.04em;margin-top:8px}.small{font-size:13px;color:#8f97a4}.good{color:#46d48c}.bad{color:#ff6b6b}.amber{color:#f5bd57}.row{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 0;border-bottom:1px solid #20252d}.row:last-child{border-bottom:0}.kv{font-size:14px}.kv b{font-weight:650}.btn{border:1px solid #2a303a;border-radius:10px;padding:8px 10px;background:#171b22;color:#fff;font:inherit}.table{width:100%;border-collapse:collapse;font-size:13px}.table th,.table td{text-align:left;padding:11px 8px;border-bottom:1px solid #20252d;white-space:nowrap}.table th{color:#7f8793;font-size:11px;text-transform:uppercase;letter-spacing:.08em;font-weight:600}.muted{color:#7e8794}.empty{padding:28px 0;color:#737c89;text-align:center}.section-title{font-size:16px;font-weight:680;margin-bottom:10px}.settings-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px 18px}.mini{padding:10px 0;border-bottom:1px solid #20252d}.mini span{display:block;color:#7f8793;font-size:11px;text-transform:uppercase;letter-spacing:.08em}.mini b{display:block;margin-top:4px;font-size:15px}.footer{margin:18px 0 4px;color:#6f7782;font-size:12px;text-align:center}@media(max-width:900px){.wrap{padding:18px}.top{flex-direction:column}.stat,.wide,.side{grid-column:1/-1}.value{font-size:24px}.table{display:block;overflow-x:auto}.settings-grid{grid-template-columns:1fr}}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="top">
+      <div>
+        <div class="eyebrow">Cloud execution</div>
+        <div class="title">Gold Copy Trader</div>
+        <div class="sub">Source monitoring, target execution, trailing protection and Telegram control.</div>
+      </div>
+      <div class="pill"><span id="systemDot" class="dot"></span><span id="systemText">Loading…</span></div>
+    </div>
+
+    <div class="grid">
+      <div class="card stat"><div class="label">Current lot size</div><div class="value" id="lotSize">—</div><div class="small">Persists until changed in Telegram</div></div>
+      <div class="card stat"><div class="label">Open P/L</div><div class="value" id="openPnl">$0.00</div><div class="small">Copied target positions</div></div>
+      <div class="card stat"><div class="label">Today P/L</div><div class="value" id="todayPnl">$0.00</div><div class="small">Realized copied trades</div></div>
+      <div class="card stat"><div class="label">Total P/L</div><div class="value" id="totalPnl">$0.00</div><div class="small">Since this copier started</div></div>
+
+      <div class="card wide">
+        <div class="section-title">Live copied positions</div>
+        <div style="overflow:auto">
+          <table class="table">
+            <thead><tr><th>Source</th><th>Target</th><th>Symbol</th><th>Side</th><th>Lot</th><th>Open</th><th>SL</th><th>P/L</th></tr></thead>
+            <tbody id="positionsBody"></tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="card side">
+        <div class="section-title">System</div>
+        <div class="row"><div class="kv">Source</div><div id="sourceStatus" class="kv muted">—</div></div>
+        <div class="row"><div class="kv">Target</div><div id="targetStatus" class="kv muted">—</div></div>
+        <div class="row"><div class="kv">Copying</div><div id="copyStatus" class="kv muted">—</div></div>
+        <div class="row"><div class="kv">Telegram</div><div id="telegramStatus" class="kv muted">—</div></div>
+        <div class="row"><div class="kv">Last update</div><div id="lastUpdate" class="kv muted">—</div></div>
+      </div>
+
+      <div class="card side">
+        <div class="section-title">Risk & trailing</div>
+        <div class="settings-grid">
+          <div class="mini"><span>Initial SL / 0.01</span><b id="slRisk">—</b></div>
+          <div class="mini"><span>Trail trigger / 0.01</span><b id="trailTrigger">—</b></div>
+          <div class="mini"><span>Trail gap / 0.01</span><b id="trailGap">—</b></div>
+          <div class="mini"><span>Trail step / 0.01</span><b id="trailStep">—</b></div>
+        </div>
+        <p class="small" style="margin:14px 0 0">No take-profit is placed. The stop follows profitable movement and never loosens.</p>
+      </div>
+
+      <div class="card wide">
+        <div class="section-title">Recent closed copied trades</div>
+        <div style="overflow:auto">
+          <table class="table">
+            <thead><tr><th>Closed</th><th>Symbol</th><th>Side</th><th>Lot</th><th>Reason</th><th>P/L</th></tr></thead>
+            <tbody id="closedBody"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+    <div class="footer">The dashboard is informational. Trade execution remains controlled by the cloud worker and Telegram authorization.</div>
+  </div>
+<script>
+const money=n=>`${n<0?'−':''}$${Math.abs(Number(n||0)).toFixed(2)}`;
+const cls=n=>Number(n)>0?'good':Number(n)<0?'bad':'';
+const esc=s=>String(s??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+function setPnl(id,n){const el=document.getElementById(id);el.textContent=money(n);el.className='value '+cls(n)}
+async function refresh(){
+ try{
+  const r=await fetch('/api/state',{cache:'no-store'});const s=await r.json();
+  document.getElementById('systemDot').className='dot '+(s.status==='connected'?'on':'');
+  document.getElementById('systemText').textContent=s.status==='connected'?'Online':s.status||'Unknown';
+  document.getElementById('lotSize').textContent=Number(s.settings?.lot_size||0).toFixed(2);
+  setPnl('openPnl',s.pnl?.open);setPnl('todayPnl',s.pnl?.today);setPnl('totalPnl',s.pnl?.total);
+  const source=s.sourceConnected&&s.brokerConnected?'Connected':'Disconnected';
+  const target=s.targetConfigured?(s.targetConnected?'Connected':'Disconnected'):'Not configured';
+  document.getElementById('sourceStatus').innerHTML=`<span class="${source==='Connected'?'good':'bad'}">${source}</span>`;
+  document.getElementById('targetStatus').innerHTML=`<span class="${target==='Connected'?'good':target==='Not configured'?'amber':'bad'}">${target}</span>`;
+  document.getElementById('copyStatus').innerHTML=s.settings?.copy_enabled?'<span class="good">Running</span>':'<span class="amber">Paused</span>';
+  document.getElementById('telegramStatus').innerHTML=s.telegramPaired?'<span class="good">Paired</span>':'<span class="amber">Not paired</span>';
+  document.getElementById('lastUpdate').textContent=s.lastUpdate?new Date(s.lastUpdate).toLocaleString():'—';
+  document.getElementById('slRisk').textContent=money(s.settings?.initial_sl_per_001);
+  document.getElementById('trailTrigger').textContent=money(s.settings?.trail_trigger_per_001);
+  document.getElementById('trailGap').textContent=money(s.settings?.trailing_gap_per_001);
+  document.getElementById('trailStep').textContent=money(s.settings?.trailing_step_per_001);
+  const pb=document.getElementById('positionsBody');const pos=s.copiedPositions||[];
+  pb.innerHTML=pos.length?pos.map(p=>`<tr><td>${esc(p.source_ticket)}</td><td>${esc(p.target_position_id||'pending')}</td><td>${esc(p.target_symbol||p.symbol)}</td><td>${esc(p.side)}</td><td>${Number(p.volume||0).toFixed(2)}</td><td>${Number(p.open_price||0).toFixed(2)}</td><td>${p.stop_loss?Number(p.stop_loss).toFixed(2):'—'}</td><td class="${cls(p.profit)}">${money(p.profit)}</td></tr>`).join(''):'<tr><td colspan="8" class="empty">No copied positions open</td></tr>';
+  const cb=document.getElementById('closedBody');const closed=s.recentClosed||[];
+  cb.innerHTML=closed.length?closed.map(p=>`<tr><td>${esc(p.closed_at?new Date(p.closed_at).toLocaleString():'—')}</td><td>${esc(p.target_symbol||p.symbol)}</td><td>${esc(p.side)}</td><td>${Number(p.volume||0).toFixed(2)}</td><td>${esc(p.close_reason||'—')}</td><td class="${cls(p.realized_pnl)}">${money(p.realized_pnl)}</td></tr>`).join(''):'<tr><td colspan="6" class="empty">No copied trades closed yet</td></tr>';
+ }catch(e){document.getElementById('systemText').textContent='Dashboard unavailable'}
+}
+refresh();setInterval(refresh,2000);
+</script>
+</body>
+</html>
