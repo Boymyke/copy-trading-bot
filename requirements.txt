@@ -1,2 +1,2 @@
-MetaTrader5==5.0.5120
+metaapi-cloud-sdk
 python-dotenv==1.0.1
