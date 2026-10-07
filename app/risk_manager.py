@@ -71,6 +71,7 @@ class RiskManager:
         self.last_cycle_ok_at: Optional[float] = None
         self.last_error: Optional[str] = None
         self.consecutive_failures = 0
+        self.total_failures = 0
         self._failure_notified_at: Optional[float] = None
 
         self.spec: Optional[dict] = None
@@ -528,8 +529,10 @@ class RiskManager:
 
     def _on_success(self) -> None:
         recovered = self.consecutive_failures >= FAILURE_NOTIFY_AFTER and self._failure_notified_at is not None
-        if not self.online:
+        if self.last_cycle_ok_at is None:
             self.store.event("info", "risk", "Target REST monitoring online")
+        elif self.consecutive_failures >= FAILURE_NOTIFY_AFTER:
+            self.store.event("info", "risk", f"Target REST monitoring back online after {self.consecutive_failures} failed reads")
         self.online = True
         self.last_cycle_ok_at = time.time()
         self.last_error = None
@@ -543,15 +546,22 @@ class RiskManager:
 
     def _on_failure(self, exc: Exception) -> float:
         self.consecutive_failures += 1
-        self.online = False
+        self.total_failures += 1
         self.last_error = str(exc)
+        # A single 504 from MetaApi ("not connected to broker yet") is common and
+        # clears on the next poll; only a run of failures counts as an outage.
+        outage = self.consecutive_failures >= FAILURE_NOTIFY_AFTER
+        if outage or self.last_cycle_ok_at is None:
+            self.online = False
         is_rest = isinstance(exc, MetaApiRestError)
         if is_rest:
-            log.error("risk_cycle_failed", error=str(exc), endpoint=exc.endpoint, status=exc.status,
-                      consecutive_failures=self.consecutive_failures)
+            (log.error if outage else log.warning)(
+                "risk_cycle_failed", error=str(exc), endpoint=exc.endpoint, status=exc.status,
+                consecutive_failures=self.consecutive_failures, outage=outage,
+            )
         else:
             log.exception("risk_cycle_crashed", error=str(exc), consecutive_failures=self.consecutive_failures)
-        if self.consecutive_failures in (1, FAILURE_NOTIFY_AFTER) or self.consecutive_failures % 50 == 0:
+        if (not is_rest and self.consecutive_failures == 1) or self.consecutive_failures == FAILURE_NOTIFY_AFTER or self.consecutive_failures % 50 == 0:
             self.store.event("error", "risk", f"Risk cycle failed ({self.consecutive_failures}x): {exc}")
         now = time.time()
         should_notify = self.consecutive_failures >= FAILURE_NOTIFY_AFTER and (
@@ -583,6 +593,7 @@ class RiskManager:
             "lastCycleOkAt": self.last_cycle_ok_at,
             "lastError": self.last_error,
             "consecutiveFailures": self.consecutive_failures,
+            "totalFailures": self.total_failures,
             "restBaseUrl": self.rest.base_url,
             "restRequests": self.rest.request_count,
             "restErrors": self.rest.error_count,

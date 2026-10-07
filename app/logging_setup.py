@@ -71,7 +71,7 @@ def configure_logging(level: str = "INFO") -> None:
     root.handlers[:] = [handler]
     root.setLevel(getattr(logging, level, logging.INFO))
     # The MetaApi SDKs are chatty; we keep their warnings but not their info noise.
-    for noisy in ("metaapi_cloud_sdk", "metaapi_cloud_copyfactory_sdk", "aiohttp.access", "socketio", "engineio"):
+    for noisy in ("metaapi_cloud_sdk", "metaapi_cloud_copyfactory_sdk", "aiohttp.access", "httpx", "httpcore", "socketio", "engineio"):
         logging.getLogger(noisy).setLevel(logging.WARNING)
 
 
