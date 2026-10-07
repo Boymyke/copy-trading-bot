@@ -6,6 +6,7 @@ from pathlib import Path
 @dataclass(frozen=True)
 class Settings:
     metaapi_token: str
+    metaapi_rest_base_url: str
     source_account_id: str
     target_account_id: str
     telegram_bot_token: str
@@ -28,6 +29,10 @@ def load_settings() -> Settings:
     data_dir.mkdir(parents=True, exist_ok=True)
     return Settings(
         metaapi_token=os.getenv("METAAPI_TOKEN", "").strip(),
+        metaapi_rest_base_url=os.getenv(
+            "METAAPI_REST_BASE_URL",
+            "https://mt-client-api-v1.london.agiliumtrade.ai",
+        ).strip().rstrip("/"),
         source_account_id=os.getenv("METAAPI_SOURCE_ACCOUNT_ID", "").strip(),
         target_account_id=os.getenv("METAAPI_TARGET_ACCOUNT_ID", "").strip(),
         telegram_bot_token=os.getenv("TELEGRAM_BOT_TOKEN", "").strip(),
