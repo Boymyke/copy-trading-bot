@@ -101,10 +101,17 @@ class FakeTrading:
         return list(self.stopouts)
 
 
+class FakeHistory:
+    async def get_subscription_transactions(self, since, till, subscriber_ids=None, limit=None):
+        return [{"time": "t", "type": "DEAL_TYPE_BUY", "symbol": "XAUUSD.f", "positionId": "S1", "slavePositionId": "T1",
+                 "strategy": {"name": "Gold Source Strategy"}}]
+
+
 class FakeCopyFactory:
     def __init__(self):
         self.configuration_api = FakeConfiguration()
         self.trading_api = FakeTrading()
+        self.history_api = FakeHistory()
 
 
 def drain(notifier):
@@ -247,10 +254,19 @@ async def test_copyfactory_errors_from_user_log_are_reported(env, monkeypatch, a
         {"time": "t2", "level": "ERROR", "message": "Symbol XAUUSDm not found", "positionId": "1"},
         {"time": "t1", "level": "INFO", "message": "Opened position", "positionId": "1"},
     ]
+    await controller.monitor.cycle()  # first read is a silent 24h backfill
+    assert not [m for m in drain(notifier) if "CopyFactory ERROR" in m]
+    cf_api.trading_api.user_log.insert(0, {"time": "t3", "level": "ERROR", "message": "Not enough money", "positionId": "2"})
     await controller.monitor.cycle()
     await controller.monitor.cycle()  # same records again -> not re-reported
     msgs = drain(notifier)
-    assert [m for m in msgs if "CopyFactory ERROR" in m] == ["🔴 CopyFactory ERROR: Symbol XAUUSDm not found"]
+    assert [m for m in msgs if "CopyFactory ERROR" in m] == ["🔴 CopyFactory ERROR: Not enough money"]
+
+
+async def test_copy_history_is_read(env, monkeypatch, aiohttp_server):
+    _, _, controller, _, _ = await _setup(monkeypatch, aiohttp_server)
+    history = await controller.copyfactory.recent_copy_history()
+    assert history["count"] == 1 and history["latest"][0]["targetPositionId"] == "T1"
 
 
 def test_no_trade_code_exists():

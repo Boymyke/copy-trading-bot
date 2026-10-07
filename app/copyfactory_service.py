@@ -114,6 +114,30 @@ class CopyFactoryService:
             or []
         )
 
+    async def recent_copy_history(self, days: int = 7) -> dict:
+        """Read-only proof of copying: CopyFactory's own deal history for this subscriber."""
+        from datetime import datetime, timedelta, timezone
+
+        till = datetime.now(timezone.utc)
+        since = till - timedelta(days=days)
+        txs = await self.copyfactory.history_api.get_subscription_transactions(
+            since, till, subscriber_ids=[self.settings.target_account_id], limit=1000
+        )
+        rows = [
+            {
+                "time": str(t.get("time")),
+                "type": t.get("type"),
+                "symbol": t.get("symbol"),
+                "sourcePositionId": t.get("positionId"),
+                "targetPositionId": t.get("slavePositionId"),
+                "quantity": t.get("quantity"),
+                "profit": t.get("profit"),
+                "strategy": (t.get("strategy") or {}).get("name"),
+            }
+            for t in (txs or [])
+        ]
+        return {"days": days, "count": len(rows), "latest": rows[-20:] if rows else []}
+
     async def get_stopouts(self) -> list:
         return [dict(s) for s in (await self.copyfactory.trading_api.get_stopouts(self.settings.target_account_id) or [])]
 

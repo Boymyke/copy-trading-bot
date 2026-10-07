@@ -101,8 +101,11 @@ class MirrorMonitor:
         self.sync_alerted = False
         self.sync_detail: Optional[str] = None
         self._bad_volume_alerted: set[str] = set()
-        self._user_log_since: datetime = datetime.now(timezone.utc) - timedelta(minutes=10)
+        # First read backfills 24h into the logs (for diagnosis) without alerting.
+        self._user_log_since: datetime = datetime.now(timezone.utc) - timedelta(hours=24)
+        self._user_log_backfilled = False
         self._user_log_seen: set[str] = set()
+        self._history_checked_at = 0.0
         self._loaded = self._load_state()
 
     # -- persistence ----------------------------------------------------------------
@@ -126,6 +129,10 @@ class MirrorMonitor:
 
     async def cycle(self) -> None:
         s = self.settings
+        # CopyFactory reads use a different API host/budget, so they still run
+        # while the trading API is rate-limiting position reads.
+        await self._read_user_log()
+        await self._log_copy_history()
         source_positions = await self.rest.get_positions(s.source_account_id)
         target_positions = await self.rest.get_positions(s.target_account_id)
 
@@ -153,7 +160,18 @@ class MirrorMonitor:
 
         self._check_volumes()
         self._check_sync()
-        await self._read_user_log()
+
+    async def _log_copy_history(self) -> None:
+        """Every 6 h, log CopyFactory's own record of copied deals (separate API host)."""
+        if time.time() - self._history_checked_at < 6 * 3600:
+            return
+        self._history_checked_at = time.time()
+        try:
+            history = await self.copyfactory.recent_copy_history(days=7)
+        except Exception as exc:
+            log.warning("copy_history_failed", error=f"{type(exc).__name__}: {exc}")
+            return
+        log.info("copyfactory_copy_history", **history)
 
     def _diff(self, side: str, old: dict, new: dict) -> None:
         s = self.settings
@@ -271,10 +289,12 @@ class MirrorMonitor:
             self._user_log_seen.add(key)
             level = str(r.get("level") or "INFO").upper()
             fields = {k: r.get(k) for k in ("symbol", "positionId", "side", "type", "openPrice", "strategyName")}
-            log.info("copyfactory_user_log", cf_level=level, cf_message=r.get("message"), time=r.get("time"), **fields)
-            if level in ("WARN", "ERROR"):
+            log.info("copyfactory_user_log", cf_level=level, cf_message=r.get("message"), time=r.get("time"),
+                     backfill=not self._user_log_backfilled, **fields)
+            if level in ("WARN", "ERROR") and self._user_log_backfilled:
                 self.store.event("warning" if level == "WARN" else "error", "copyfactory-log", str(r.get("message"))[:500])
                 self.notifier.notify(f"{'⚠️' if level == 'WARN' else '🔴'} CopyFactory {level}: {r.get('message')}", kind="copyfactory-log")
+        self._user_log_backfilled = True
         if len(self._user_log_seen) > 2000:
             self._user_log_seen = set(list(self._user_log_seen)[-500:])
 
