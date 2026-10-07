@@ -80,6 +80,7 @@ class RiskManager:
         self.price: Optional[dict] = None
         self._price_fetched_at = 0.0
         self.account_info: Optional[dict] = None
+        self._account_task: Optional[asyncio.Task] = None
         self._account_info_fetched_at = 0.0
 
         self.target_positions_total = 0
@@ -225,7 +226,9 @@ class RiskManager:
 
         # Always prove the symbol is readable, even when flat.
         await self._refresh_spec()
-        await self._refresh_account_info()
+        # Account info is informational only: never let a slow read delay SL maths.
+        if self._account_task is None or self._account_task.done():
+            self._account_task = asyncio.create_task(self._refresh_account_info(), name="account-info")
 
         managed: list[dict] = []
         seen_ids: set[str] = set()
