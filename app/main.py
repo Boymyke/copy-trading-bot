@@ -8,6 +8,7 @@ from .web import WebServer
 
 
 async def main():
+    print("[v4] starting native CopyFactory controller", flush=True)
     settings = load_settings()
     missing = []
     if not settings.metaapi_token:
@@ -23,6 +24,7 @@ async def main():
     controller = Controller(settings, store)
     telegram = TelegramBot(settings, store, controller)
     WebServer(controller).start()
+    print("[v4] web/telegram/control layer initialized", flush=True)
 
     store.event("info", "startup", "Gold Copy Trader v4 controller started")
 
