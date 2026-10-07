@@ -3,62 +3,130 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1" />
-<title>Gold Copy Trader v4</title>
+<title>Gold Copy Trader · Dry Run</title>
 <style>
-:root{font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color-scheme:dark;background:#090909;color:#f7f7f7}*{box-sizing:border-box}body{margin:0;background:linear-gradient(180deg,#0b0b0b,#050505);min-height:100vh}.wrap{max-width:1180px;margin:auto;padding:28px}.top{display:flex;justify-content:space-between;gap:20px;align-items:center;margin-bottom:24px}.eyebrow{color:#ff6b35;font-weight:700;font-size:12px;letter-spacing:.12em;text-transform:uppercase}h1{font-size:30px;margin:5px 0 0}.badge{padding:9px 12px;border:1px solid #333;border-radius:999px;background:#121212;font-size:13px}.grid{display:grid;grid-template-columns:repeat(4,1fr);gap:14px}.card{background:#101010;border:1px solid #242424;border-radius:16px;padding:18px;box-shadow:0 12px 35px rgba(0,0,0,.18)}.card h3{font-size:12px;color:#969696;text-transform:uppercase;letter-spacing:.08em;margin:0 0 10px}.value{font-size:25px;font-weight:700}.small{font-size:13px;color:#a9a9a9;margin-top:6px;line-height:1.5}.ok{color:#55d98b}.bad{color:#ff6b6b}.warn{color:#ffc66d}.two{display:grid;grid-template-columns:1.2fr .8fr;gap:14px;margin-top:14px}.row{display:flex;justify-content:space-between;gap:16px;padding:12px 0;border-bottom:1px solid #242424}.row:last-child{border-bottom:0}.label{color:#a9a9a9}.events{max-height:390px;overflow:auto}.event{padding:12px 0;border-bottom:1px solid #222}.event:last-child{border-bottom:0}.event .meta{font-size:11px;color:#777;margin-bottom:5px}.event .msg{font-size:13px;line-height:1.45;overflow-wrap:anywhere}.positions{margin-top:14px}.position{display:grid;grid-template-columns:1fr 1fr 1fr 1fr 1fr;gap:10px;padding:12px 0;border-bottom:1px solid #222;font-size:13px}.muted{color:#777}button{background:#181818;color:white;border:1px solid #333;border-radius:10px;padding:10px 13px;cursor:pointer}button:hover{border-color:#555}@media(max-width:900px){.grid{grid-template-columns:repeat(2,1fr)}.two{grid-template-columns:1fr}.position{grid-template-columns:1fr 1fr}}@media(max-width:520px){.wrap{padding:18px}.grid{grid-template-columns:1fr}.top{align-items:flex-start;flex-direction:column}}
+:root{font-family:Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;color-scheme:dark;--bg:#07080a;--card:#101114;--line:#23252b;--muted:#8b8f98;--text:#f2f3f5;--ok:#4ade80;--bad:#f87171;--warn:#fbbf24;--dry:#facc15}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);min-height:100vh}
+.dry{position:sticky;top:0;z-index:5;background:repeating-linear-gradient(-45deg,#facc15 0 14px,#111 14px 28px);padding:4px}
+.dry div{background:#111;color:var(--dry);text-align:center;font-weight:800;letter-spacing:.14em;padding:10px 12px;font-size:15px;text-transform:uppercase}
+.dry small{display:block;color:#d6d3c4;letter-spacing:0;font-weight:500;text-transform:none;font-size:12px;margin-top:3px}
+.wrap{max-width:1240px;margin:auto;padding:22px 16px 40px}
+.top{display:flex;justify-content:space-between;gap:16px;align-items:center;margin-bottom:18px;flex-wrap:wrap}
+h1{font-size:24px;margin:0}.eyebrow{color:var(--muted);font-size:12px;letter-spacing:.1em;text-transform:uppercase}
+.badge{padding:7px 11px;border:1px solid var(--line);border-radius:999px;background:var(--card);font-size:12px;color:var(--muted)}
+button{background:#181a1f;color:var(--text);border:1px solid #33363d;border-radius:9px;padding:8px 12px;cursor:pointer}
+.grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px;min-width:0}
+.card h3{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.09em;margin:0 0 9px;font-weight:600}
+.value{font-size:20px;font-weight:700;display:flex;align-items:center;gap:8px}
+.dot{width:10px;height:10px;border-radius:50%;flex:none}.dot.ok{background:var(--ok)}.dot.bad{background:var(--bad)}.dot.warn{background:var(--warn)}.dot.idle{background:#555}
+.small{font-size:12.5px;color:var(--muted);margin-top:7px;line-height:1.5;overflow-wrap:anywhere}
+.ok{color:var(--ok)}.bad{color:var(--bad)}.warn{color:var(--warn)}
+.section{margin-top:12px}.two{display:grid;grid-template-columns:1.35fr .65fr;gap:12px;margin-top:12px}
+table{width:100%;border-collapse:collapse;font-size:13px}th{color:var(--muted);font-weight:600;text-align:left;font-size:11px;text-transform:uppercase;letter-spacing:.06em;padding:8px 8px;border-bottom:1px solid var(--line)}
+td{padding:10px 8px;border-bottom:1px solid #1a1c21;vertical-align:top;font-variant-numeric:tabular-nums}
+.tbl{overflow-x:auto}.kv{display:flex;justify-content:space-between;gap:12px;padding:8px 0;border-bottom:1px solid #1a1c21;font-size:13px}.kv:last-child{border:0}.kv span:first-child{color:var(--muted)}
+.events{max-height:440px;overflow:auto}.event{padding:9px 0;border-bottom:1px solid #1a1c21}.event .meta{font-size:11px;color:#6b6f78;margin-bottom:3px}.event .msg{font-size:12.5px;line-height:1.45;overflow-wrap:anywhere}
+.event.error .msg{color:var(--bad)}.event.warning .msg{color:var(--warn)}
+.pill{display:inline-block;font-size:11px;padding:2px 7px;border-radius:999px;border:1px solid var(--line);color:var(--muted)}
+.pill.trail{border-color:#2f6b45;color:var(--ok)}.pill.hit{border-color:#7a5b16;color:var(--warn)}
+.warnbox{border:1px solid #5a4510;background:#1a1508;color:#f3d38a;border-radius:12px;padding:12px 14px;font-size:13px;margin-top:12px;display:none}
+@media(max-width:980px){.grid{grid-template-columns:repeat(2,minmax(0,1fr))}.two{grid-template-columns:1fr}}
+@media(max-width:520px){.grid{grid-template-columns:1fr}}
 </style>
 </head>
 <body>
+<div class="dry"><div>Dry run — risk manager sends no orders and no SL changes<small>Every SL below is simulated. CopyFactory copying itself is controlled separately (see Copying).</small></div></div>
 <div class="wrap">
   <div class="top">
-    <div><div class="eyebrow">Ferrn · Native CopyFactory Architecture</div><h1>Gold Copy Trader v4</h1></div>
+    <div><div class="eyebrow">MetaApi CopyFactory · REST risk monitor</div><h1>Gold Copy Trader <span id="ver"></span></h1></div>
     <div><span id="updated" class="badge">Loading…</span> <button onclick="load()">Refresh</button></div>
   </div>
+
   <div class="grid">
-    <div class="card"><h3>Native CopyFactory</h3><div id="cf" class="value">—</div><div id="cfSub" class="small"></div></div>
-    <div class="card"><h3>Copy Mode</h3><div id="copy" class="value">—</div><div id="lot" class="small"></div></div>
-    <div class="card"><h3>Risk Manager</h3><div id="risk" class="value">—</div><div id="riskSub" class="small"></div></div>
-    <div class="card"><h3>Managed Positions</h3><div id="count" class="value">0</div><div id="symbols" class="small"></div></div>
+    <div class="card"><h3>Source account</h3><div id="src" class="value">—</div><div id="srcSub" class="small"></div></div>
+    <div class="card"><h3>Target account</h3><div id="tgt" class="value">—</div><div id="tgtSub" class="small"></div></div>
+    <div class="card"><h3>CopyFactory</h3><div id="cf" class="value">—</div><div id="cfSub" class="small"></div></div>
+    <div class="card"><h3>Risk manager</h3><div id="risk" class="value">—</div><div id="riskSub" class="small"></div></div>
   </div>
+  <div class="grid section">
+    <div class="card"><h3>Copying</h3><div id="copy" class="value">—</div><div id="copySub" class="small"></div></div>
+    <div class="card"><h3>Lot</h3><div id="lot" class="value">—</div><div id="route" class="small"></div></div>
+    <div class="card"><h3>Open managed positions</h3><div id="count" class="value">0</div><div id="countSub" class="small"></div></div>
+    <div class="card"><h3>Current floating P/L</h3><div id="pnl" class="value">—</div><div id="pnlSub" class="small"></div></div>
+  </div>
+  <div id="warnbox" class="warnbox"></div>
+
+  <div class="card section">
+    <h3>Managed target positions — simulated SL</h3>
+    <div class="tbl"><table>
+      <thead><tr><th>Position</th><th>Side</th><th>Lot</th><th>Entry</th><th>Bid / Ask</th><th>Floating P/L</th><th>Simulated SL</th><th>Trailing</th><th>Broker SL</th></tr></thead>
+      <tbody id="positions"></tbody>
+    </table></div>
+    <div id="ignored" class="small"></div>
+  </div>
+
   <div class="two">
     <div class="card">
-      <h3>Execution Architecture</h3>
-      <div class="row"><span class="label">Trade replication</span><strong>MetaApi CopyFactory native</strong></div>
-      <div class="row"><span class="label">Railway role</span><strong>Control + risk management only</strong></div>
-      <div class="row"><span class="label">Source SL / TP copied</span><strong>No / No</strong></div>
-      <div class="row"><span class="label">Fixed target lot</span><strong id="fixedLot">—</strong></div>
-      <div class="row"><span class="label">Symbol route</span><strong id="route">—</strong></div>
-      <div class="row"><span class="label">Initial SL</span><strong id="sl">—</strong></div>
-      <div class="row"><span class="label">Trail trigger / gap / step</span><strong id="trail">—</strong></div>
-      <div class="positions" id="positions"></div>
+      <h3>Risk settings &amp; symbol</h3>
+      <div class="kv"><span>Initial SL (per 0.01)</span><strong id="sl">—</strong></div>
+      <div class="kv"><span>Trail trigger / gap / step</span><strong id="trail">—</strong></div>
+      <div class="kv"><span>Symbol spec</span><strong id="spec">—</strong></div>
+      <div class="kv"><span>Tick value (loss / profit, per lot)</span><strong id="tv">—</strong></div>
+      <div class="kv"><span>Target account</span><strong id="acct">—</strong></div>
+      <div class="kv"><span>CopyFactory SL / TP copied</span><strong id="cfsltp">—</strong></div>
+      <h3 style="margin-top:18px">Recently closed</h3>
+      <div class="tbl"><table><thead><tr><th>Position</th><th>Side</th><th>Entry</th><th>Final P/L</th><th>Simulated</th><th>Closed</th></tr></thead><tbody id="closed"></tbody></table></div>
     </div>
-    <div class="card"><h3>Recent System Events</h3><div id="events" class="events"></div></div>
+    <div class="card"><h3>Recent events &amp; errors</h3><div id="events" class="events"></div></div>
   </div>
 </div>
 <script>
+const $=id=>document.getElementById(id);
 function esc(v){return String(v??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]))}
+function money(v){if(v===null||v===undefined||v==='')return '—';v=Number(v);return `<span class="${v>=0?'ok':'bad'}">${v>=0?'+':'-'}$${Math.abs(v).toFixed(2)}</span>`}
+function dot(c){return `<span class="dot ${c}"></span>`}
+function ago(ts){if(!ts)return 'never';const s=Math.max(0,Math.round(Date.now()/1000-ts));return s<60?s+'s ago':s<3600?Math.round(s/60)+'m ago':Math.round(s/3600)+'h ago'}
+function acct(el,sub,a){
+  if(!a){$(el).innerHTML=dot('idle')+'Checking';$(sub).textContent='';return}
+  if(a.error){$(el).innerHTML=dot('bad')+'<span class="bad">Error</span>';$(sub).textContent=a.error;return}
+  $(el).innerHTML=dot(a.connected?'ok':'bad')+`<span class="${a.connected?'ok':'bad'}">${esc(a.connectionStatus||'?')}</span>`;
+  $(sub).textContent=`${a.name||a.id} · ${a.state||'?'} · ${a.region||'?'} · roles ${(a.copyFactoryRoles||[]).join(', ')||'none'}`;
+}
 async function load(){
   try{
     const r=await fetch('/api/state',{cache:'no-store'}); if(!r.ok) throw new Error('HTTP '+r.status); const s=await r.json();
-    const cf=s.copyFactory, risk=s.risk;
-    document.getElementById('cf').innerHTML=cf.ready?'<span class="ok">READY</span>':'<span class="bad">NOT READY</span>';
-    document.getElementById('cfSub').textContent=cf.error||'Trade copying runs outside Railway.';
-    document.getElementById('copy').innerHTML=cf.paused?'<span class="warn">PAUSED</span>':'<span class="ok">ACTIVE</span>';
-    document.getElementById('lot').textContent='Fixed lot '+Number(cf.lot).toFixed(2);
-    document.getElementById('risk').innerHTML=risk.connected?'<span class="ok">CONNECTED</span>':'<span class="warn">RECONNECTING</span>';
-    document.getElementById('riskSub').textContent=risk.lastError||'Broker-side SL manager healthy.';
-    document.getElementById('count').textContent=(risk.managedPositions||[]).length;
-    document.getElementById('symbols').textContent=cf.sourceSymbol+' → '+cf.targetSymbol;
-    document.getElementById('fixedLot').textContent=Number(cf.lot).toFixed(2)+' lot';
-    document.getElementById('route').textContent=cf.sourceSymbol+' → '+cf.targetSymbol;
-    document.getElementById('sl').textContent='$'+Number(risk.initialSlUsd).toFixed(2)+' per 0.01';
-    document.getElementById('trail').textContent='$'+Number(risk.trailTriggerUsd).toFixed(2)+' / $'+Number(risk.trailGapUsd).toFixed(2)+' / $'+Number(risk.trailStepUsd).toFixed(2);
-    document.getElementById('positions').innerHTML=(risk.managedPositions||[]).map(p=>`<div class="position"><b>${esc(p.side)}</b><span>${esc(p.symbol)}</span><span>${Number(p.volume).toFixed(2)} lot</span><span>SL ${Number(p.current_sl||0).toFixed(2)}</span><span>P/L $${Number(p.last_profit||0).toFixed(2)}</span></div>`).join('')||'<div class="small muted">No managed target positions open.</div>';
-    document.getElementById('events').innerHTML=(s.events||[]).map(e=>`<div class="event"><div class="meta">${esc(e.created_at)} · ${esc(e.level)} · ${esc(e.kind)}</div><div class="msg">${esc(e.message)}</div></div>`).join('')||'<div class="small muted">No events yet.</div>';
-    document.getElementById('updated').textContent='Updated '+new Date().toLocaleTimeString();
-  }catch(e){document.getElementById('updated').textContent='Dashboard error'; document.getElementById('cfSub').textContent=e.message}
+    const cf=s.copyFactory, risk=s.risk, st=cf.status||{}, acc=s.accounts||{};
+    $('ver').textContent='v'+s.version;
+    acct('src','srcSub',acc.source); acct('tgt','tgtSub',acc.target);
+    $('cf').innerHTML=cf.ready?dot('ok')+'<span class="ok">Adopted</span>':dot('bad')+'<span class="bad">Not ready</span>';
+    $('cfSub').textContent=cf.ready?`'${st.strategyName}' (${st.strategyId}) · checked ${ago(cf.checkedAt)}`:(cf.error||'Checking…');
+    $('risk').innerHTML=risk.online?dot('ok')+'<span class="ok">Online</span>':dot('bad')+`<span class="bad">Retrying</span>`;
+    $('riskSub').textContent=risk.online?`${risk.mode} · last read ${ago(risk.lastCycleOkAt)} · ${risk.restRequests} reads / ${risk.restErrors} errors`:(risk.lastError||'Starting…')+` (${risk.consecutiveFailures} failures)`;
+    if(cf.paused===null){$('copy').innerHTML=dot('idle')+'Unknown';$('copySub').textContent='Not read from CopyFactory yet'}
+    else{$('copy').innerHTML=cf.paused?dot('warn')+'<span class="warn">Paused</span>':dot('ok')+'<span class="ok">Resumed</span>';$('copySub').textContent=(cf.paused?'closeOnly='+(st.closeOnly||'?'):'New source trades are copied')+(cf.pausedIsLive?'':' (last known)')}
+    $('lot').textContent=Number(cf.lot).toFixed(2);
+    const ts=st.tradeSize||{};$('route').textContent=`${cf.sourceSymbol} → ${cf.targetSymbol} · ${ts.mode||'?'} on ${ts.level||'?'} · multiplier ${ts.multiplier??'?'}`;
+    const rows=risk.managedPositions||[];
+    $('count').textContent=rows.length; $('countSub').textContent=`${risk.targetPositionsTotal} total position(s) on target`;
+    const total=rows.reduce((a,p)=>a+Number(p.broker_profit||0),0);
+    $('pnl').innerHTML=rows.length?money(total):'—'; $('pnlSub').textContent=rows.length?'Broker floating P/L of managed positions':'No managed positions open';
+    const d=(risk.spec||{}).digits??2;
+    $('positions').innerHTML=rows.map(p=>`<tr><td>#${esc(p.position_id)}<div class="small">${esc(p.first_seen)}</div></td><td><b>${esc(p.side)}</b></td><td>${Number(p.volume).toFixed(2)}</td><td>${esc(p.open_price)}</td><td>${esc(p.last_bid)} / ${esc(p.last_ask)}</td><td>${money(p.broker_profit)}</td><td><b>${p.simulated_sl!=null?Number(p.simulated_sl).toFixed(d):'—'}</b><div class="small">initial ${p.simulated_initial_sl!=null?Number(p.simulated_initial_sl).toFixed(d):'—'}${p.notes?' · '+esc(p.notes):''}</div></td><td>${p.trail_active?`<span class="pill trail">Trailing · locks ${money(p.locked_money)}</span>`:'<span class="pill">Waiting for +$'+(Number(risk.trailTriggerUsd)*Number(p.volume)/0.01).toFixed(2)+'</span>'}${p.sl_hit_at?`<div><span class="pill hit">Sim SL hit ≈ ${money(p.sl_hit_money)}</span></div>`:''}</td><td>${p.broker_sl?esc(p.broker_sl):'none'}</td></tr>`).join('')||'<tr><td colspan="9" class="small">No managed target positions open.</td></tr>';
+    const ig=risk.ignoredPositions||[]; $('ignored').innerHTML=ig.length?'Ignored (not managed): '+ig.map(i=>`#${esc(i.id)} ${esc(i.symbol)} ${esc(i.volume)} — ${esc(i.why)}`).join(' · '):'';
+    $('sl').textContent='$'+Number(risk.initialSlUsd).toFixed(2);
+    $('trail').textContent=`$${Number(risk.trailTriggerUsd).toFixed(2)} / $${Number(risk.trailGapUsd).toFixed(2)} / $${Number(risk.trailStepUsd).toFixed(2)}`;
+    const sp=risk.spec; $('spec').textContent=sp?`${risk.symbol} · ${sp.digits} digits · tick ${sp.tickSize} · stops ${sp.stopsLevel} · freeze ${sp.freezeLevel} pts`:'not read yet';
+    const pr=risk.price; $('tv').textContent=pr?`${pr.lossTickValue??'—'} / ${pr.profitTickValue??'—'} · bid ${pr.bid} ask ${pr.ask}`:'—';
+    const a=risk.account; $('acct').textContent=a?`${a.broker||''} ${a.server||''} · ${a.currency||''} bal ${a.balance} eq ${a.equity}`:'—';
+    $('cfsltp').textContent=cf.ready?`${st.copyStopLoss?'Yes':'No'} / ${st.copyTakeProfit?'Yes':'No'} · pending skipped: ${st.skipPendingOrders?'yes':'no'} · reverse: ${st.reverse?'on':'off'}`:'—';
+    $('closed').innerHTML=(risk.recentClosed||[]).map(p=>`<tr><td>#${esc(p.position_id)}</td><td>${esc(p.side)}</td><td>${esc(p.open_price)}</td><td>${money(p.final_profit)}</td><td>${p.sl_hit_at?'SL hit ≈ '+money(p.sl_hit_money):p.trail_active?'trailing, locked '+money(p.locked_money):'initial SL '+esc(p.simulated_sl)}</td><td class="small">${esc(p.closed_at)}</td></tr>`).join('')||'<tr><td colspan="6" class="small">None yet.</td></tr>';
+    const w=st.warnings||[]; $('warnbox').style.display=w.length?'block':'none'; $('warnbox').innerHTML='<b>CopyFactory configuration warnings (not changed by the bot):</b><br>'+w.map(esc).join('<br>');
+    $('events').innerHTML=(s.events||[]).map(e=>`<div class="event ${esc(e.level)}"><div class="meta">${esc(e.created_at)} · ${esc(e.level)} · ${esc(e.kind)}</div><div class="msg">${esc(e.message)}</div></div>`).join('')||'<div class="small">No events yet.</div>';
+    $('updated').textContent='Updated '+new Date().toLocaleTimeString();
+  }catch(e){$('updated').textContent='Dashboard error: '+e.message}
 }
-load();setInterval(load,5000);
+load();setInterval(load,3000);
 </script>
 </body>
 </html>
