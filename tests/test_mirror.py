@@ -220,6 +220,13 @@ async def test_429_waits_for_recommended_retry_time(env, monkeypatch, aiohttp_se
     assert mon.state()["rateLimitedUntil"] > time.time() + 800
     position_calls = [r for r in fake.requests if r[1].endswith("/positions")]
     assert len(position_calls) == 1  # gave up immediately, no retry storm
+    for _ in range(5):
+        mon._on_failure(err.value)
+    msgs = drain(notifier)
+    assert len(msgs) == 1 and "rate-limiting" in msgs[0]  # one message per episode
+    del fake.status_override[SRC]
+    await mon.cycle(); mon._on_success()
+    assert "recovered" in drain(notifier)[-1]
 
 
 async def test_copyfactory_active_and_adopted_without_writes(env, monkeypatch, aiohttp_server):

@@ -93,6 +93,7 @@ class MirrorMonitor:
         self.total_failures = 0
         self.rate_limited_until: Optional[float] = None
         self._failure_notified_at: Optional[float] = None
+        self._rate_limit_notified = False
 
         self.source: dict[str, dict] = {}
         self.target: dict[str, dict] = {}
@@ -313,11 +314,11 @@ class MirrorMonitor:
                 await asyncio.sleep(self._on_failure(exc))
 
     def _on_success(self) -> None:
-        if self.consecutive_failures >= FAILURE_NOTIFY_AFTER:
+        if self.consecutive_failures >= FAILURE_NOTIFY_AFTER or self._rate_limit_notified:
             self.store.event("info", "monitor", f"Monitoring recovered after {self.consecutive_failures} failed polls")
-            if self._failure_notified_at is not None:
-                self.notifier.notify("🟢 Monitoring recovered.", kind="monitor-recovered")
-        elif self.last_ok_at is None:
+            if self._failure_notified_at is not None or self._rate_limit_notified:
+                self.notifier.notify("🟢 Monitoring recovered — position reads working again.", kind="monitor-recovered")
+        if self.last_ok_at is None and not self.consecutive_failures:
             self.store.event("info", "monitor", "Mirror monitoring online")
         self.online = True
         self.last_ok_at = time.time()
@@ -325,6 +326,7 @@ class MirrorMonitor:
         self.rate_limited_until = None
         self.consecutive_failures = 0
         self._failure_notified_at = None
+        self._rate_limit_notified = False
 
     def _on_failure(self, exc: Exception) -> float:
         self.consecutive_failures += 1
@@ -352,6 +354,18 @@ class MirrorMonitor:
         if self.consecutive_failures == FAILURE_NOTIFY_AFTER or (is_rest and exc.status == 429 and self.consecutive_failures == 1):
             self.store.event("error", "monitor", f"Monitoring poll failing ({self.consecutive_failures}x): {exc}")
         now = time.time()
+        rate_limited = is_rest and exc.status == 429
+        if rate_limited:
+            # One message per rate-limit episode: MetaApi's budget is a rolling window,
+            # we already wait its recommended time, and CopyFactory is unaffected.
+            if not self._rate_limit_notified:
+                self._rate_limit_notified = True
+                self.notifier.notify(
+                    "🟠 MetaApi is rate-limiting position reads for monitoring (credit window used up by an older build). "
+                    "The monitor waits MetaApi's recommended time and resumes automatically. CopyFactory copying is not affected.",
+                    kind="monitor-rate-limited",
+                )
+            return delay
         if outage and (self._failure_notified_at is None or now - self._failure_notified_at >= FAILURE_RENOTIFY_SECONDS):
             self._failure_notified_at = now
             self.notifier.notify(
