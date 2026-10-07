@@ -138,6 +138,10 @@ class MetaApiRestClient:
     async def get_account_information(self, account_id: str) -> dict:
         return dict(await self._get(self._account_url(account_id, "/account-information"), "account-information") or {})
 
+    async def get_deals_by_time(self, account_id: str, start_iso: str, end_iso: str) -> list[dict]:
+        url = self._account_url(account_id, f"/history-deals/time/{quote(start_iso, safe='')}/{quote(end_iso, safe='')}")
+        return list(await self._get(url, "history-deals-time") or [])
+
     async def get_deals_by_position(self, account_id: str, position_id: str) -> list[dict]:
         url = self._account_url(account_id, f"/history-deals/position/{quote(str(position_id), safe='')}")
         return list(await self._get(url, "history-deals") or [])

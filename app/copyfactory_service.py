@@ -136,7 +136,33 @@ class CopyFactoryService:
             }
             for t in (txs or [])
         ]
-        return {"days": days, "count": len(rows), "latest": rows[-20:] if rows else []}
+        result = {"days": days, "count": len(rows), "latest": rows[-20:] if rows else []}
+
+        # What the source actually traded in the same window (one trading-API call).
+        try:
+            fmt = "%Y-%m-%dT%H:%M:%S.000Z"
+            deals = await self.rest.get_deals_by_time(self.settings.source_account_id, since.strftime(fmt), till.strftime(fmt))
+            gold = [d for d in deals if d.get("symbol") == self.settings.copy_symbol]
+            result["sourceDeals"] = len(gold)
+            result["sourceSymbolsTraded"] = sorted({str(d.get("symbol")) for d in deals if d.get("symbol")})
+            result["sourceLatest"] = [
+                {k: d.get(k) for k in ("time", "type", "entryType", "symbol", "volume", "positionId", "price")}
+                for d in gold[-10:]
+            ]
+        except Exception as exc:
+            result["sourceDealsError"] = f"{type(exc).__name__}: {exc}"
+
+        # Signals the strategy itself received/logged (CopyFactory provider side).
+        try:
+            logs = await self.copyfactory.trading_api.get_strategy_log(
+                self.strategy_id, start_time=since, limit=50
+            ) if self.strategy_id else []
+            result["strategyLog"] = [
+                {k: r.get(k) for k in ("time", "level", "message", "symbol", "positionId")} for r in (logs or [])[:20]
+            ]
+        except Exception as exc:
+            result["strategyLogError"] = f"{type(exc).__name__}: {exc}"
+        return result
 
     async def get_stopouts(self) -> list:
         return [dict(s) for s in (await self.copyfactory.trading_api.get_stopouts(self.settings.target_account_id) or [])]

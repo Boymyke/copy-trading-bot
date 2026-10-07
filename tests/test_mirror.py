@@ -52,6 +52,9 @@ class FakeMetaApi:
             if p == f"/users/current/accounts/{acc}":
                 return web.json_response({"_id": acc, "name": acc, "state": "DEPLOYED", "connectionStatus": "CONNECTED",
                                           "copyFactoryRoles": ["PROVIDER" if acc == SRC else "SUBSCRIBER"]})
+        if "/history-deals/time/" in p:
+            return web.json_response([{"symbol": "XAUUSD.f", "entryType": "DEAL_ENTRY_IN", "positionId": "S1"},
+                                      {"symbol": "EURUSD", "entryType": "DEAL_ENTRY_IN"}])
         if "/history-deals/position/" in p:
             return web.json_response(self.deals.get(p.rsplit("/", 1)[-1], []))
         return web.json_response({"error": "not found"}, status=404)
@@ -99,6 +102,9 @@ class FakeTrading:
 
     async def get_stopouts(self, subscriber_id):
         return list(self.stopouts)
+
+    async def get_strategy_log(self, strategy_id, start_time=None, limit=1000, **kw):
+        return [{"time": "t", "level": "INFO", "message": "signal"}]
 
 
 class FakeHistory:
@@ -212,8 +218,8 @@ async def test_429_waits_for_recommended_retry_time(env, monkeypatch, aiohttp_se
     delay = mon._on_failure(err.value)
     assert 880 <= delay <= 900
     assert mon.state()["rateLimitedUntil"] > time.time() + 800
-    calls_before = len(fake.requests)
-    assert calls_before == 1  # gave up immediately, no retry storm
+    position_calls = [r for r in fake.requests if r[1].endswith("/positions")]
+    assert len(position_calls) == 1  # gave up immediately, no retry storm
 
 
 async def test_copyfactory_active_and_adopted_without_writes(env, monkeypatch, aiohttp_server):
@@ -266,7 +272,11 @@ async def test_copyfactory_errors_from_user_log_are_reported(env, monkeypatch, a
 async def test_copy_history_is_read(env, monkeypatch, aiohttp_server):
     _, _, controller, _, _ = await _setup(monkeypatch, aiohttp_server)
     history = await controller.copyfactory.recent_copy_history()
+    await controller.copyfactory.refresh()
+    history = await controller.copyfactory.recent_copy_history()
     assert history["count"] == 1 and history["latest"][0]["targetPositionId"] == "T1"
+    assert history["sourceDeals"] == 1 and history["sourceSymbolsTraded"] == ["EURUSD", "XAUUSD.f"]
+    assert history["strategyLog"][0]["message"] == "signal"
 
 
 def test_no_trade_code_exists():
