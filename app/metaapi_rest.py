@@ -55,6 +55,9 @@ class MetaApiRestClient:
         self.last_error: Optional[str] = None
         self.request_count = 0
         self.error_count = 0
+        # Per-account trading-API host, learned from the account's provisioning
+        # region (e.g. london -> https://mt-client-api-v1.london.agiliumtrade.ai).
+        self.account_hosts: dict[str, str] = {}
 
     async def _get_session(self) -> aiohttp.ClientSession:
         if self._session is None or self._session.closed:
@@ -110,8 +113,13 @@ class MetaApiRestClient:
 
     # -- trading terminal ---------------------------------------------------
 
+    def set_account_region(self, account_id: str, region: Optional[str]) -> None:
+        if region:
+            self.account_hosts[account_id] = f"https://mt-client-api-v1.{region}.agiliumtrade.ai"
+
     def _account_url(self, account_id: str, suffix: str) -> str:
-        return f"{self.base_url}/users/current/accounts/{quote(account_id, safe='')}{suffix}"
+        host = self.account_hosts.get(account_id, self.base_url)
+        return f"{host}/users/current/accounts/{quote(account_id, safe='')}{suffix}"
 
     async def get_positions(self, account_id: str) -> list[dict]:
         data = await self._get(self._account_url(account_id, "/positions"), "positions")

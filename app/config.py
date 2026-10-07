@@ -10,11 +10,6 @@ import os
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
-# This build only contains a monitoring / simulation risk manager. There is no
-# code path that sends orders or POSITION_MODIFY requests to a broker, so dry-run
-# is a fact of the build rather than a toggle that could be flipped by mistake.
-DRY_RUN = True
-
 
 def _env_str(name: str, default: str = "") -> str:
     return os.getenv(name, default).strip()
@@ -34,11 +29,6 @@ def _env_int(name: str, default: int) -> int:
     return int(_env_float(name, float(default)))
 
 
-def _env_list(name: str, default: str) -> tuple[str, ...]:
-    raw = os.getenv(name, default)
-    return tuple(part.strip() for part in raw.split(",") if part.strip())
-
-
 @dataclass(frozen=True)
 class Settings:
     metaapi_token: str
@@ -53,30 +43,17 @@ class Settings:
     target_symbol: str
     strategy_name: str
     fixed_lot: float
-    initial_sl_usd: float
-    trail_trigger_usd: float
-    trail_gap_usd: float
-    trail_step_usd: float
     telegram_poll_timeout: int
-    controller_poll_seconds: float
+    monitor_poll_seconds: float
     copyfactory_refresh_seconds: float
     rest_timeout_seconds: float
-    spec_cache_seconds: float
-    pnl_update_seconds: float
-    close_confirm_polls: int
-    managed_exclude_reasons: tuple[str, ...]
     log_level: str
-
-    @property
-    def dry_run(self) -> bool:
-        return DRY_RUN
 
     def redacted(self) -> dict:
         data = asdict(self)
         for key in ("metaapi_token", "telegram_bot_token", "telegram_pairing_code", "dashboard_password"):
             data[key] = "set" if data[key] else "missing"
         data["data_dir"] = str(self.data_dir)
-        data["dry_run"] = self.dry_run
         return data
 
 
@@ -98,20 +75,12 @@ def load_settings() -> Settings:
         target_symbol=_env_str("TARGET_SYMBOL", "XAUUSDm"),
         strategy_name=_env_str("COPYFACTORY_STRATEGY_NAME", "Gold Source Strategy"),
         fixed_lot=_env_float("DEFAULT_LOT", 0.01),
-        initial_sl_usd=_env_float("DEFAULT_INITIAL_SL_USD", 0.60),
-        trail_trigger_usd=_env_float("DEFAULT_TRAIL_TRIGGER_USD", 0.50),
-        trail_gap_usd=_env_float("DEFAULT_TRAIL_GAP_USD", 0.20),
-        trail_step_usd=_env_float("DEFAULT_TRAIL_STEP_USD", 0.10),
         telegram_poll_timeout=_env_int("TELEGRAM_POLL_TIMEOUT", 25),
-        controller_poll_seconds=max(0.25, _env_float("CONTROLLER_POLL_SECONDS", 0.5)),
-        copyfactory_refresh_seconds=max(10.0, _env_float("COPYFACTORY_REFRESH_SECONDS", 30.0)),
-        rest_timeout_seconds=max(2.0, _env_float("METAAPI_REST_TIMEOUT_SECONDS", 15.0)),
-        spec_cache_seconds=max(30.0, _env_float("SPEC_CACHE_SECONDS", 600.0)),
-        pnl_update_seconds=max(0.0, _env_float("TELEGRAM_PNL_UPDATE_SECONDS", 60.0)),
-        close_confirm_polls=max(1, _env_int("CLOSE_CONFIRM_POLLS", 2)),
-        managed_exclude_reasons=_env_list(
-            "MANAGED_EXCLUDE_REASONS",
-            "POSITION_REASON_CLIENT,POSITION_REASON_MOBILE,POSITION_REASON_WEB",
-        ),
+        # Monitoring only: CopyFactory copies trades natively, so position reads can be
+        # infrequent. Floor of 15 s keeps the trading-API credit budget far from 429.
+        # (CONTROLLER_POLL_SECONDS from older builds is intentionally ignored.)
+        monitor_poll_seconds=max(15.0, _env_float("MONITOR_POLL_SECONDS", 60.0)),
+        copyfactory_refresh_seconds=max(30.0, _env_float("COPYFACTORY_REFRESH_SECONDS", 60.0)),
+        rest_timeout_seconds=max(5.0, _env_float("METAAPI_REST_TIMEOUT_SECONDS", 20.0)),
         log_level=_env_str("LOG_LEVEL", "INFO").upper(),
     )

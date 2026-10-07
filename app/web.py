@@ -62,13 +62,13 @@ class WebServer:
                     if self.path == "/health":
                         # Always 200 while the process is alive: Railway must not restart
                         # us just because MetaApi or the broker is temporarily down.
-                        risk = controller.risk
+                        mon = controller.monitor.state()
                         self._json(200, {
                             "status": "ok",
-                            "dryRun": controller.settings.dry_run,
                             "copyFactoryReady": controller.copyfactory_ready,
-                            "riskOnline": risk.state()["online"],
-                            "riskConsecutiveFailures": risk.consecutive_failures,
+                            "copyFactoryActive": bool((controller.last_cf_status or {}).get("active")),
+                            "monitorOnline": mon["online"],
+                            "inSync": mon["inSync"],
                         })
                         return
                     if not self._require_auth():

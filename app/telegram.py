@@ -89,85 +89,68 @@ class TelegramBot:
     def status_text(self) -> str:
         s = self.controller.state()
         cf = s["copyFactory"]
-        risk = s["risk"]
+        mon = s["monitor"]
         accounts = s.get("accounts") or {}
-        cf_status = cf.get("status") or {}
+        st = cf.get("status") or {}
 
-        if cf["ready"]:
-            cf_line = f"🟢 READY — '{cf_status.get('strategyName')}' adopted"
+        if cf["active"]:
+            cf_line = f"🟢 ACTIVE — '{st.get('strategyName')}' → '{st.get('subscriberName')}'"
+        elif cf["ready"]:
+            cf_line = "🟠 NOT ACTIVE — see warnings below"
         else:
             cf_line = f"🔴 NOT READY — {(cf.get('error') or 'checking…')[:300]}"
         if cf["paused"] is None:
-            copy_line = "⚪ unknown (CopyFactory not read yet)"
+            copy_line = "⚪ unknown (not read yet)"
         else:
-            copy_line = ("⏸ PAUSED (closeOnly)" if cf["paused"] else "▶️ RESUMED — copying new trades")
-            if not cf.get("pausedIsLive"):
-                copy_line += " (last known)"
+            copy_line = "⏸ PAUSED (closeOnly)" if cf["paused"] else "▶️ ON — source open = target open, source close = target close"
 
-        if risk["online"]:
-            risk_line = f"🟢 ONLINE — REST read {_ago(risk.get('lastCycleOkAt'))}"
+        if mon["online"]:
+            mon_line = f"🟢 OK — positions read {_ago(mon.get('lastOkAt'))} (every {mon['pollSeconds']:g}s)"
+        elif mon.get("rateLimitedUntil"):
+            mon_line = f"🟠 rate-limited by MetaApi, resuming in {max(0, int(mon['rateLimitedUntil'] - time.time()))}s"
         else:
-            risk_line = f"🔴 RETRYING ({risk.get('consecutiveFailures')}x) — {(risk.get('lastError') or 'starting…')[:300]}"
-        price = risk.get("price") or {}
-        spec = risk.get("spec")
+            mon_line = f"🔴 retrying ({mon.get('consecutiveFailures')}x) — {(mon.get('lastError') or 'starting…')[:300]}"
+        sync = "🟢 in sync" if mon.get("inSync") else f"🟠 {mon.get('syncDetail')}"
         lines = [
-            "🤖 Gold Copy Trader v5",
-            "🟡 MODE: DRY RUN — no orders or SL changes are ever sent",
+            "🤖 Gold Copy Trader",
             "",
             _account_line("Source", accounts.get("source")),
             _account_line("Target", accounts.get("target")),
             f"CopyFactory: {cf_line}",
             f"Copying: {copy_line}",
-            f"Risk manager: {risk_line}",
+            f"Monitor: {mon_line}",
             "",
             f"Route: {cf['sourceSymbol']} → {cf['targetSymbol']}  |  Lot: {cf['lot']:g}",
-            f"{risk['symbol']} spec: " + (f"digits {spec['digits']}, tick {spec['tickSize']:g}, stops {spec['stopsLevel']:g} pts, freeze {spec['freezeLevel']:g} pts" if spec else "not read yet"),
-            f"Bid/Ask: {price.get('bid', '—')}/{price.get('ask', '—')}",
-            f"Initial SL ${risk['initialSlUsd']:.2f} · Trail at ${risk['trailTriggerUsd']:.2f} · gap ${risk['trailGapUsd']:.2f} · step ${risk['trailStepUsd']:.2f} (per 0.01)",
-            f"Managed open: {len(risk['managedPositions'])}  |  All target positions: {risk['targetPositionsTotal']}",
+            f"SL/TP copied: {'yes' if st.get('copyStopLoss') else 'no'}/{'yes' if st.get('copyTakeProfit') else 'no'}",
+            f"Open: source {len(mon['sourcePositions'])} · target {len(mon['targetPositions'])} · {sync}",
         ]
-        warnings = cf_status.get("warnings") or []
+        warnings = st.get("warnings") or []
         if warnings:
-            lines += ["", "⚠️ Config warnings:"] + [f"• {w}" for w in warnings]
+            lines += ["", "⚠️ Needs attention:"] + [f"• {w}" for w in warnings]
         return "\n".join(lines)
 
     def positions_text(self) -> str:
-        risk = self.controller.risk.state()
-        rows = risk["managedPositions"]
-        lines: list[str] = []
-        if not rows:
-            lines.append("No managed target positions are open.")
-        else:
-            lines.append("📈 Managed target positions (DRY RUN)")
+        mon = self.controller.monitor.state()
+        lines = []
+        for label, rows in (("Source", mon["sourcePositions"]), ("Target", mon["targetPositions"])):
+            lines.append(f"{label}: {len(rows)} open")
             for r in rows[:20]:
-                lines.append(
-                    f"\n{r['side']} {r['symbol']} {float(r['volume']):g} #{r['position_id']}\n"
-                    f"Entry {r['open_price']} | Bid/Ask {r.get('last_bid')}/{r.get('last_ask')}\n"
-                    f"Floating P/L {_money(r.get('broker_profit'))}\n"
-                    f"Simulated SL {r.get('simulated_sl')} ({'trailing, locks ' + _money(r.get('locked_money')) if r.get('trail_active') else 'initial'})"
-                    + (f"\n⚠️ Simulated SL hit at {r.get('sl_hit_price')} (≈{_money(r.get('sl_hit_money'))})" if r.get("sl_hit_at") else "")
-                )
-        ignored = risk.get("ignoredPositions") or []
-        if ignored:
-            lines.append("\nIgnored (not managed):")
-            lines += [f"• #{i['id']} {i['symbol']} {i['volume']}: {i['why']}" for i in ignored[:10]]
-        return "\n".join(lines)
+                lines.append(f"  {r['side']} {r['symbol']} {r['volume']:g} @ {r['openPrice']} · P/L {_money(r.get('profit'))} · #{r['id']}")
+        lines.append("" if mon.get("inSync") else f"\n⚠️ {mon.get('syncDetail')}")
+        lines.append(f"(as of {_ago(mon.get('lastOkAt'))})")
+        return "\n".join(lines).strip()
 
     @staticmethod
     def help_text() -> str:
         return (
-            "Gold Copy Trader v5 — DRY RUN\n\n"
-            "/status — source, target, CopyFactory, risk manager, pause state\n"
-            "/positions — managed target trades with simulated SL\n"
-            "/pause — CopyFactory stops opening NEW copied trades (closeOnly)\n"
+            "Gold Copy Trader\n\n"
+            "/status — accounts, CopyFactory, copying on/off, sync\n"
+            "/positions — open source and target trades\n"
+            "/pause — CopyFactory stops opening NEW target trades\n"
             "/resume — CopyFactory copies new trades again\n"
-            "/lot 0.01 — CopyFactory fixed volume for NEW trades\n"
-            "/setsl 0.60 — simulated initial SL $ per 0.01\n"
-            "/settrigger 0.50 — simulated trailing starts at this profit per 0.01\n"
-            "/setgap 0.20 — simulated trailing gap $ per 0.01\n"
-            "/setstep 0.10 — minimum simulated SL improvement per 0.01\n"
             "/help — this list\n\n"
-            "The risk manager only calculates and reports. It never sends orders or SL changes."
+            "MetaApi CopyFactory opens and closes the target trades (XAUUSDm, 0.01). "
+            "This bot only monitors and reports."
         )
 
     # -- command handling -----------------------------------------------------------
@@ -208,31 +191,15 @@ class TelegramBot:
                 reply = self.positions_text()
             elif cmd == "/pause":
                 await self.controller.set_pause(True)
-                reply = "⏸ CopyFactory paused (closeOnly=by-position). Already-copied trades still close when the source closes."
+                reply = "⏸ CopyFactory paused (closeOnly=by-position). New source trades will not copy; already-copied trades still close when the source closes."
             elif cmd == "/resume":
                 await self.controller.set_pause(False)
                 reply = (
                     f"▶️ CopyFactory resumed. New {self.settings.copy_symbol} source trades will copy to the target as "
-                    f"{self.settings.target_symbol}. Risk manager stays DRY RUN."
+                    f"{self.settings.target_symbol} at {self.controller.lot():g} lot."
                 )
-            elif cmd == "/lot":
-                value = float(arg)
-                where = await self.controller.set_lot(value)
-                reply = f"✅ CopyFactory fixed volume set to {value:g} (changed on the {where}; nothing else modified)."
-            elif cmd in ("/setsl", "/settrigger", "/setgap", "/setstep"):
-                value = float(arg)
-                key, label = {
-                    "/setsl": ("initial_sl_usd", "Simulated initial SL"),
-                    "/settrigger": ("trail_trigger_usd", "Simulated trail trigger"),
-                    "/setgap": ("trail_gap_usd", "Simulated trailing gap"),
-                    "/setstep": ("trail_step_usd", "Simulated trailing step"),
-                }[cmd]
-                self.controller.set_risk(key, value)
-                reply = f"✅ {label} set to ${value:g} per 0.01 lot (applies to new calculations)."
             else:
                 reply = "Unknown command.\n\n" + self.help_text()
-        except ValueError:
-            reply = f"❌ Expected a number, e.g. {cmd} 0.01" if cmd in ("/lot", "/setsl", "/settrigger", "/setgap", "/setstep") else "❌ Invalid value"
         except Exception as exc:
             log.exception("telegram_command_failed", command=cmd)
             reply = f"❌ {exc}"
@@ -264,8 +231,8 @@ class TelegramBot:
                     self.store.event("info", "telegram", f"Telegram bot @{self.username} started (paired={paired})")
                     if paired:
                         await self.send(
-                            f"🚀 Gold Copy Trader v5 started at {datetime.now(timezone.utc):%Y-%m-%d %H:%M} UTC\n"
-                            "🟡 DRY RUN — the risk manager only calculates and reports.\nSend /status for details."
+                            f"🚀 Gold Copy Trader restarted at {datetime.now(timezone.utc):%Y-%m-%d %H:%M} UTC\n"
+                            "CopyFactory keeps copying regardless. Send /status for details."
                         )
                 response = await self._api(
                     "getUpdates",

@@ -8,9 +8,9 @@ Rules this service follows:
   target account.
 * Its periodic refresh is **read-only**. It validates the remote configuration
   and reports mismatches as warnings; it never "corrects" them.
-* Writes happen only when the operator explicitly asks (``/pause``, ``/resume``,
-  ``/lot``), and they are read-modify-write: the current remote object is
-  fetched, exactly one field is changed, and everything else is sent back as-is.
+* Writes happen only when the operator explicitly asks (``/pause``, ``/resume``),
+  and they are read-modify-write: the current remote object is fetched, exactly
+  one field (``closeOnly``) is changed, and everything else is sent back as-is.
 * It never deploys/undeploys accounts and opens no websocket connections
   (CopyFactory configuration and MetaApi provisioning are plain REST).
 """
@@ -18,6 +18,7 @@ Rules this service follows:
 from __future__ import annotations
 
 import copy
+import json
 from typing import Any, Optional
 
 from metaapi_cloud_copyfactory_sdk import CopyFactory
@@ -30,7 +31,6 @@ from .storage import Store
 log = get_logger("copyfactory")
 
 PAUSED_CLOSE_ONLY = {"by-position", "by-symbol", "immediately"}
-_STRATEGY_READ_ONLY = ("_id", "platformCommissionRate", "closeOnRemovalMode")
 
 
 class CopyFactoryConfigError(RuntimeError):
@@ -54,12 +54,15 @@ class CopyFactoryService:
         self.subscription: Optional[dict] = None
         self.accounts: dict[str, dict] = {}
         self.warnings: list[str] = []
+        self.stopouts: list[dict] = []
+        self._config_fingerprint: Optional[str] = None
 
     # -- accounts ---------------------------------------------------------------------
 
     async def inspect_accounts(self) -> dict[str, dict]:
         result: dict[str, dict] = {}
         for role, account_id in (("source", self.settings.source_account_id), ("target", self.settings.target_account_id)):
+            previous = self.accounts.get(role, {})
             try:
                 acc = await self.rest.get_account(account_id)
                 info = {
@@ -68,13 +71,21 @@ class CopyFactoryService:
                     "state": acc.get("state"),
                     "connectionStatus": acc.get("connectionStatus"),
                     "region": acc.get("region"),
+                    "reliability": acc.get("reliability"),
                     "copyFactoryRoles": list(acc.get("copyFactoryRoles") or []),
                     "connected": acc.get("state") == "DEPLOYED" and acc.get("connectionStatus") == "CONNECTED",
                     "error": None,
+                    "readFailures": 0,
                 }
+                self.rest.set_account_region(account_id, acc.get("region"))
             except MetaApiRestError as exc:
-                info = {"id": account_id, "connected": False, "error": str(exc)}
-            previous = self.accounts.get(role, {})
+                failures = int(previous.get("readFailures") or 0) + 1
+                if previous and not previous.get("error") and failures < 3:
+                    # A single slow provisioning read is not a disconnect: keep last known state.
+                    info = {**previous, "readFailures": failures}
+                    log.warning("account_read_failed", role=role, error=str(exc), failures=failures)
+                else:
+                    info = {"id": account_id, "connected": False, "error": str(exc), "readFailures": failures}
             if (previous.get("state"), previous.get("connectionStatus"), previous.get("error")) != (
                 info.get("state"),
                 info.get("connectionStatus"),
@@ -86,6 +97,7 @@ class CopyFactoryService:
                     f"{role}-account",
                     f"{role.title()} account {info.get('name') or account_id}: state={info.get('state')} "
                     f"connection={info.get('connectionStatus')} region={info.get('region')}"
+                    + (f" reliability={info.get('reliability')}" if info.get("reliability") else "")
                     + (f" error={info['error']}" if info.get("error") else ""),
                     account_id=account_id,
                     roles=info.get("copyFactoryRoles"),
@@ -93,6 +105,17 @@ class CopyFactoryService:
             result[role] = info
         self.accounts = result
         return result
+
+    async def get_user_log(self, since) -> list:
+        return list(
+            await self.copyfactory.trading_api.get_user_log(
+                self.settings.target_account_id, start_time=since, limit=200
+            )
+            or []
+        )
+
+    async def get_stopouts(self) -> list:
+        return [dict(s) for s in (await self.copyfactory.trading_api.get_stopouts(self.settings.target_account_id) or [])]
 
     # -- adoption ---------------------------------------------------------------------
 
@@ -200,6 +223,40 @@ class CopyFactoryService:
             warnings.append(f"Trade size mode is {size['mode']!r} (expected fixedVolume)")
         elif size["lot"] is not None and abs(size["lot"] - s.fixed_lot) > 1e-8:
             warnings.append(f"Effective CopyFactory lot is {size['lot']:g}, DEFAULT_LOT is {s.fixed_lot:g}")
+
+        # Anything that lets CopyFactory skip, alter or close the target trade on its
+        # own (instead of mirroring the source lifecycle) is reported here.
+        subscriber = self.subscriber or {}
+        lifetime = (strat.get("timeSettings") or {}).get("lifetimeInHours")
+        if lifetime:
+            warnings.append(f"Strategy closes copied trades after lifetimeInHours={lifetime} (target may close before source)")
+        for label, obj in (("strategy", strat), ("subscription", sub), ("subscriber", subscriber)):
+            if obj.get("riskLimits"):
+                warnings.append(f"{label} riskLimits set: {obj.get('riskLimits')} (can stop copying / close trades)")
+            if obj.get("maxStopLoss"):
+                warnings.append(f"{label} maxStopLoss set: {obj.get('maxStopLoss')} (adds an SL to copied trades)")
+            if obj.get("maxTradeRisk") not in (None, 0):
+                warnings.append(f"{label} maxTradeRisk={obj.get('maxTradeRisk')} (can reduce/skip trades)")
+            if obj.get("newsFilter"):
+                warnings.append(f"{label} newsFilter set (can skip trades around news)")
+            if obj.get("signalDelay"):
+                warnings.append(f"{label} signalDelay set: {obj.get('signalDelay')}")
+            sides = obj.get("allowedSides")
+            if sides and set(sides) != {"buy", "sell"} and "all" not in sides:
+                warnings.append(f"{label} allowedSides={sides} (some trades will not copy)")
+        if str(sub.get("closeOnly") or "") in PAUSED_CLOSE_ONLY:
+            warnings.append(f"Copying is PAUSED (closeOnly={sub.get('closeOnly')}): new source trades will NOT open on target")
+        for stopout in self.stopouts:
+            warnings.append(
+                f"CopyFactory stop-out: {stopout.get('reason')} — {stopout.get('reasonDescription')} "
+                f"(until {stopout.get('stoppedTill')})"
+            )
+        for role, needed in (("source", "PROVIDER"), ("target", "SUBSCRIBER")):
+            acc = self.accounts.get(role) or {}
+            if acc.get("copyFactoryRoles") is not None and needed not in (acc.get("copyFactoryRoles") or []) and not acc.get("error"):
+                warnings.append(f"{role} account is missing CopyFactory role {needed}")
+            if acc and not acc.get("connected"):
+                warnings.append(f"{role} account not connected to broker ({acc.get('connectionStatus') or acc.get('error')})")
         return warnings
 
     # -- public API ------------------------------------------------------------------
@@ -210,6 +267,11 @@ class CopyFactoryService:
         await self.inspect_accounts()
         self.strategy = await self._adopt_strategy()
         self.subscriber, self.subscription = await self._read_subscription()
+        try:
+            self.stopouts = await self.get_stopouts()
+        except Exception as exc:  # informational
+            log.warning("stopouts_read_failed", error=f"{type(exc).__name__}: {exc}")
+        self._log_config_if_changed()
         self.warnings.extend(self._validate())
 
         paused = str(self.subscription.get("closeOnly") or "") in PAUSED_CLOSE_ONLY
@@ -221,6 +283,24 @@ class CopyFactoryService:
         if size["lot"] is not None:
             self.store.set("lot_size", size["lot"])
         return self.status()
+
+    def _log_config_if_changed(self) -> None:
+        """Log the full live CopyFactory config (no secrets in it) whenever it changes."""
+        snapshot = {"strategy": self.strategy, "subscriber": self.subscriber, "stopouts": self.stopouts}
+        fingerprint = json.dumps(snapshot, sort_keys=True, default=str)
+        if fingerprint != self._config_fingerprint:
+            self._config_fingerprint = fingerprint
+            log.info("copyfactory_live_config", config=json.loads(fingerprint))
+
+    @property
+    def active(self) -> bool:
+        """Copying is live: subscribed, not paused, no stop-out, both accounts connected."""
+        return bool(
+            self.subscription
+            and str(self.subscription.get("closeOnly") or "") not in PAUSED_CLOSE_ONLY
+            and not self.stopouts
+            and all((self.accounts.get(r) or {}).get("connected") for r in ("source", "target"))
+        )
 
     def status(self) -> dict[str, Any]:
         strat = self.strategy or {}
@@ -240,6 +320,8 @@ class CopyFactoryService:
             "skipPendingOrders": sub.get("skipPendingOrders", strat.get("skipPendingOrders")),
             "reverse": sub.get("reverse", strat.get("reverse")),
             "warnings": list(self.warnings),
+            "active": self.active,
+            "stopouts": self.stopouts,
             "accounts": self.accounts,
         }
 
@@ -264,36 +346,3 @@ class CopyFactoryService:
         self.store.set("copy_paused", "1" if paused else "0")
         self.store.event("info", "copy-control", ("Copying paused (closeOnly=by-position)" if paused else "Copying resumed") + ("" if changed else " — already in that state"))
         await self.refresh()
-
-    async def set_lot(self, lot: float) -> str:
-        """Change the fixed CopyFactory volume where it is configured; nothing else is touched."""
-        if lot <= 0 or lot > 100:
-            raise ValueError("lot must be greater than 0 and at most 100")
-        await self._adopt_strategy()
-        subscriber, subscription = await self._read_subscription()
-        if subscription.get("tradeSizeScaling"):
-            body = copy.deepcopy(subscriber)
-            body.pop("_id", None)
-            for sub in body.get("subscriptions") or []:
-                if str(sub.get("strategyId")) == self.strategy_id and not sub.get("removed"):
-                    if sub["tradeSizeScaling"].get("mode") != "fixedVolume":
-                        raise CopyFactoryConfigError("Subscription trade size mode is not fixedVolume; change it in MetaApi")
-                    log.info("subscriber_update", field="tradeSizeScaling.tradeVolume", before=sub["tradeSizeScaling"].get("tradeVolume"), after=lot)
-                    sub["tradeSizeScaling"]["tradeVolume"] = lot
-            await self.configuration.update_subscriber(self.settings.target_account_id, body)
-            where = "subscription"
-        else:
-            strategy = dict(await self.configuration.get_strategy(self.strategy_id))
-            scaling = strategy.get("tradeSizeScaling") or {}
-            if scaling.get("mode") != "fixedVolume":
-                raise CopyFactoryConfigError("Strategy trade size mode is not fixedVolume; change it in MetaApi")
-            body = copy.deepcopy(strategy)
-            for key in _STRATEGY_READ_ONLY:
-                body.pop(key, None)
-            log.info("strategy_update", field="tradeSizeScaling.tradeVolume", before=scaling.get("tradeVolume"), after=lot)
-            body["tradeSizeScaling"]["tradeVolume"] = lot
-            await self.configuration.update_strategy(self.strategy_id, body)
-            where = "strategy"
-        self.store.event("info", "lot", f"CopyFactory fixed volume set to {lot:g} on the {where}")
-        await self.refresh()
-        return where

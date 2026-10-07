@@ -1,9 +1,9 @@
-"""Gold Copy Trader v5.
+"""Gold Copy Trader v6.
 
-MetaApi CopyFactory copies source trades to the target account natively. This
-package adopts that existing CopyFactory setup (read-only), monitors the target
-account over MetaApi REST, and runs a DRY-RUN risk manager that calculates and
-reports simulated stop-loss / trailing-stop actions without sending any orders.
+MetaApi CopyFactory mirrors the source trade lifecycle onto the target account
+(source open -> target open, source close -> target close). This package adopts
+that existing CopyFactory setup, monitors both accounts at low frequency, and
+provides Telegram control, a dashboard and health checks. It sends no trades.
 """
 
-__version__ = "5.0.0"
+__version__ = "6.0.0"

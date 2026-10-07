@@ -1,75 +1,59 @@
-# Gold Copy Trader v5 — CopyFactory + REST dry-run risk monitor
+# Gold Copy Trader — MetaApi CopyFactory mirror
 
 ```
 Gold Source (XAUUSD.f) ──MetaApi CopyFactory──▶ Gold Target (XAUUSDm, fixed 0.01)
-                                   ▲                          │
-                read-only adopt    │                          │ REST GET only
-                pause/resume/lot   │                          ▼
-                         ┌──────── Railway: python -m app.main ────────┐
-                         │ CopyFactory monitor · DRY-RUN risk manager  │
-                         │ Telegram bot · dashboard · SQLite in /data  │
-                         └──────────────────────────────────────────────┘
+     source open  ─────────────────────────────▶ target open
+     source close ─────────────────────────────▶ target close
+                       ▲
+                       │ read-only monitoring (1 poll / 60 s), /pause /resume
+            Railway: python -m app.main  (Telegram · dashboard · /health)
 ```
 
-* **Trade copying** happens inside MetaApi CopyFactory using the strategy you
-  already configured (`Gold Source Strategy`: `XAUUSD.f → XAUUSDm`, fixed 0.01,
-  SL/TP copy off, pending orders skipped, reverse off).
-* **This service never creates or overwrites CopyFactory config.** It adopts
-  the existing strategy and subscriber, validates them, and reports differences
-  as warnings. The only writes are the ones you trigger: `/pause`, `/resume`,
-  `/lot` — each is read-modify-write of a single field.
-* **The risk manager is DRY RUN.** It polls the target account over MetaApi
-  REST (no RPC/WebSocket), calculates the SL and trailing SL it *would* set, and
-  reports them. There is no code that sends orders or `POSITION_MODIFY`.
+* **Execution is 100% MetaApi CopyFactory**, using the existing
+  `Gold Source Strategy` and `Gold Target Subscriber`
+  (`XAUUSD.f → XAUUSDm`, fixed volume 0.01, source SL/TP not copied, pending
+  orders skipped, reverse off). The target mirrors the source lifecycle and has
+  no SL, TP, trailing stop or exit logic of its own.
+* **This service sends no trades.** It never creates or overwrites
+  CopyFactory strategies or subscribers. The only writes are `/pause` and
+  `/resume`, which toggle `closeOnly` on the existing subscription and leave
+  every other field untouched.
+* It does not depend on any laptop, local MT5 terminal or local process.
 
-## Simulated risk rules (per 0.01 lot, scaled by volume)
+## What Railway runs
 
-| Rule | Default | Env / Telegram |
+| Task | Frequency | API |
 |---|---|---|
-| Initial SL | $0.60 risk | `DEFAULT_INITIAL_SL_USD` · `/setsl` |
-| Trailing starts | +$0.50 floating | `DEFAULT_TRAIL_TRIGGER_USD` · `/settrigger` |
-| Trailing gap | $0.20 behind price | `DEFAULT_TRAIL_GAP_USD` · `/setgap` |
-| Trailing step | SL moves only when it locks ≥ $0.10 more | `DEFAULT_TRAIL_STEP_USD` · `/setstep` |
+| CopyFactory config + account check | every 60 s | CopyFactory / provisioning REST |
+| Source + target open positions | every 60 s (2 calls) | trading REST |
+| CopyFactory user log (copy errors) | every 60 s | CopyFactory REST |
+| Telegram commands | long-poll | Telegram |
 
-Broker rules applied from the `XAUUSDm` specification and quote: tick size,
-digits, point, `stopsLevel` (minimum stop distance), `freezeLevel`, and tick
-value (`lossTickValue` / `profitTickValue` from the price). Prices are rounded
-conservatively, and a calculated SL is never widened.
+On HTTP 429 the monitor waits for MetaApi's `recommendedRetryTime` (up to
+30 min) instead of retrying. Every loop is supervised and restarts forever;
+`/health` stays 200 while the process is alive, and Railway's restart policy is
+`ALWAYS`.
 
-A target position is **managed** only if it is `TARGET_SYMBOL`, at the
-CopyFactory lot, and not opened manually (`MANAGED_EXCLUDE_REASONS`). All other
-positions are listed as ignored and never touched.
+## Alerts (Telegram)
 
-## Telegram
+Source opened / closed · target opened / closed (with final P/L) · source and
+target out of sync for 2 polls · target lot not 0.01 · CopyFactory user-log
+warnings/errors · CopyFactory settings that could skip or close trades on their
+own (lifetime, risk limits, max stop loss, stop-outs, paused) · accounts
+disconnected · monitoring failures and recovery.
 
+Commands: `/status`, `/positions`, `/pause`, `/resume`, `/help`.
 Pair once with `/pair <TELEGRAM_PAIRING_CODE or DASHBOARD_PASSWORD>`.
-Commands: `/status`, `/positions`, `/pause`, `/resume`, `/lot`, `/setsl`,
-`/settrigger`, `/setgap`, `/setstep`, `/help`.
-
-Automatic messages: trade detected (entry, side, lot, simulated SL), simulated
-trailing moves, "simulated SL would have been hit", floating P/L every
-`TELEGRAM_PNL_UPDATE_SECONDS`, trade closed with final P/L from deal history,
-REST/API failures (after 3 in a row) and recovery, CopyFactory config warnings.
 
 ## Dashboard
 
 `https://<railway-domain>/` — user `trader`, password `DASHBOARD_PASSWORD`.
-`/health` is unauthenticated and always 200 while the process runs.
-
-## Logs
-
-Every line on stdout is JSON (`ts`, `level`, `logger`, `event`, fields).
-Useful Railway log filters: `"event":"dry_run_intended_action"`,
-`"event":"rest_error"`, `"kind":"trade-detected"`, `"event":"risk_cycle_failed"`,
-`"event":"copyfactory_refresh_failed"`.
 
 ## Configuration
 
-See `.env.example`. Required: `METAAPI_TOKEN` (an **API access token**, not an
-account access token — CopyFactory configuration calls need it),
-`METAAPI_SOURCE_ACCOUNT_ID`, `METAAPI_TARGET_ACCOUNT_ID`,
-`METAAPI_REST_BASE_URL` (the target account's region host).
-Persistent state lives in `DATA_DIR` (`/data` volume on Railway).
+See `.env.example`. Required: `METAAPI_TOKEN` (API access token),
+`METAAPI_SOURCE_ACCOUNT_ID`, `METAAPI_TARGET_ACCOUNT_ID`. State lives in
+`DATA_DIR` (`/data` volume on Railway). Logs are one JSON object per line.
 
 ## Development
 
@@ -78,7 +62,4 @@ pip install -r requirements.txt -r requirements-dev.txt
 python -m pytest
 ```
 
-Tests cover the SL/trailing maths and a full lifecycle against a fake MetaApi
-REST server, including a check that only `GET` requests reach the trading API.
-
-`legacy/` holds earlier copiers that **do** send live orders; they are not run.
+`legacy/` holds earlier copiers that send live orders; they are not run.

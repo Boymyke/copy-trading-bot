@@ -59,11 +59,11 @@ async def main() -> None:
     controller = Controller(settings, store, notifier)
     telegram = TelegramBot(settings, store, controller, notifier)
     WebServer(controller).start()
-    store.event("info", "startup", f"Gold Copy Trader v{__version__} started in DRY RUN mode")
+    store.event("info", "startup", f"Gold Copy Trader v{__version__} started (CopyFactory executes, Railway monitors)")
 
     tasks = [
         asyncio.create_task(supervise("copyfactory-monitor", controller.monitor_copyfactory)),
-        asyncio.create_task(supervise("risk-manager", controller.risk.run)),
+        asyncio.create_task(supervise("mirror-monitor", controller.monitor.run)),
         asyncio.create_task(supervise("telegram-notifications", telegram.run_notifications)),
     ]
     if settings.telegram_bot_token:
