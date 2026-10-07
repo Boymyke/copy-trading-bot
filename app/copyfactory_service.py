@@ -68,32 +68,60 @@ class CopyFactoryService:
         except Exception:
             return False
 
+    async def _find_existing_strategy(self) -> Optional[str]:
+        """Adopt the strategy already created in the MetaApi dashboard.
+
+        This prevents the controller from generating a second strategy after the
+        user has configured the provider manually.
+        """
+        strategies = await self.configuration.get_strategies_with_infinite_scroll_pagination()
+        matches = [s for s in strategies if str(s.get("accountId")) == self.settings.source_account_id]
+        if not matches:
+            return None
+        named = next((s for s in matches if str(s.get("name")) == self.settings.strategy_name), None)
+        chosen = named or matches[0]
+        return str(chosen.get("_id") or chosen.get("id") or "") or None
+
     async def _ensure_strategy(self) -> None:
         if self.strategy_id and not await self._strategy_exists(self.strategy_id):
             self.strategy_id = None
+
+        if not self.strategy_id:
+            self.strategy_id = await self._find_existing_strategy()
+            if self.strategy_id:
+                self.store.set("copyfactory_strategy_id", self.strategy_id)
+                self.store.event("info", "copyfactory", f"Adopted existing CopyFactory strategy {self.strategy_id}")
+
         if not self.strategy_id:
             generated = await self.configuration.generate_strategy_id()
             self.strategy_id = str(generated["id"])
             self.store.set("copyfactory_strategy_id", self.strategy_id)
 
-        await self.configuration.update_strategy(
-            id=self.strategy_id,
-            strategy={
-                "name": self.settings.strategy_name,
-                "description": "Ferrn native Gold source strategy. Execution is handled by MetaApi CopyFactory.",
-                "accountId": self.settings.source_account_id,
-                "skipPendingOrders": True,
-                "symbolFilter": {"included": [self.settings.copy_symbol]},
-                "copyStopLoss": False,
-                "copyTakeProfit": False,
-                "timeSettings": {
-                    # A signal should never be opened hours after the master trade.
-                    # This also prevents a stale outage/recovery from creating an old entry.
-                    "lifetimeInHours": 1,
-                    "openingIntervalInMinutes": 1,
-                },
+        strategy: Dict[str, Any] = {
+            "name": self.settings.strategy_name,
+            "description": "Copies Gold trades from the TM Financials source account to the target account.",
+            "accountId": self.settings.source_account_id,
+            "skipPendingOrders": True,
+            "symbolFilter": {"included": [self.settings.copy_symbol]},
+            "copyStopLoss": False,
+            "copyTakeProfit": False,
+            "reverse": False,
+            "tradeSizeScaling": {
+                "mode": "fixedVolume",
+                "forceTinyTrades": False,
+                "tradeVolume": float(self.store.get("lot_size", str(self.settings.fixed_lot))),
             },
-        )
+            "timeSettings": {
+                "lifetimeInHours": 1,
+                "openingIntervalInMinutes": 1,
+            },
+        }
+        if self.settings.copy_symbol != self.settings.target_symbol:
+            strategy["symbolMapping"] = [
+                {"from": self.settings.copy_symbol, "to": self.settings.target_symbol}
+            ]
+
+        await self.configuration.update_strategy(id=self.strategy_id, strategy=strategy)
 
     def _subscription(self) -> Dict[str, Any]:
         if not self.strategy_id:
@@ -104,16 +132,16 @@ class CopyFactoryService:
             "strategyId": self.strategy_id,
             "multiplier": 1,
             "skipPendingOrders": True,
-            "symbolFilter": {"included": [self.settings.copy_symbol]},
             "tradeSizeScaling": {
                 "mode": "fixedVolume",
+                "forceTinyTrades": False,
                 "tradeVolume": lot,
             },
             "copyStopLoss": False,
             "copyTakeProfit": False,
+            "reverse": False,
         }
-        if self.settings.copy_symbol != self.settings.target_symbol:
-            sub["symbolMapping"] = [{"from": self.settings.copy_symbol, "to": self.settings.target_symbol}]
+        # Keep mapping at strategy level. Do not duplicate it in the subscriber chain.
         if paused:
             # Existing positions continue to receive close signals, but new positions
             # are not opened while the user has paused copying.
@@ -124,7 +152,7 @@ class CopyFactoryService:
         await self.configuration.update_subscriber(
             self.settings.target_account_id,
             {
-                "name": "Ferrn Gold Target",
+                "name": "Gold Target Subscriber",
                 "copyStopLoss": False,
                 "copyTakeProfit": False,
                 "subscriptions": [self._subscription()],
@@ -141,6 +169,7 @@ class CopyFactoryService:
         if lot <= 0 or lot > 100:
             raise ValueError("lot must be greater than 0 and at most 100")
         self.store.set("lot_size", lot)
+        await self._ensure_strategy()
         await self.apply_subscription()
         self.store.event("info", "lot", f"Fixed CopyFactory lot changed to {lot:g}")
 
