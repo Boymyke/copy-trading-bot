@@ -75,7 +75,30 @@ wget -qO- https://dl.winehq.org/wine-builds/winehq.key | gpg --dearmor --yes -o 
 CODENAME=$(. /etc/os-release; echo "$VERSION_CODENAME")
 wget -qNP /etc/apt/sources.list.d/ "https://dl.winehq.org/wine-builds/ubuntu/dists/$CODENAME/winehq-$CODENAME.sources"
 apt-get update -y
-apt-get install -y --install-recommends winehq-stable
+
+# Wine 10.3 and later wrongly report an attached debugger (winehq bug 58110),
+# which trips MetaTrader's copy protection: "a debugger has been found running
+# in your system". Pin Wine 9, which predates that regression.
+if ! apt-get install -y --install-recommends --allow-downgrades \
+       "winehq-stable=9.0.0.0~${CODENAME}-1"; then
+  echo "   WineHQ 9 not available for $CODENAME - using Ubuntu's own Wine instead."
+  apt-get remove -y winehq-stable wine-stable wine-stable-amd64 wine-stable-i386 >/dev/null 2>&1 || true
+  apt-get install -y --install-recommends wine winbind
+fi
+apt-mark hold winehq-stable wine-stable wine-stable-amd64 wine-stable-i386 >/dev/null 2>&1 || true
+WINEVER="$(wine --version 2>/dev/null || echo unknown)"
+echo "   Wine version: $WINEVER"
+
+# A prefix built by a different Wine version can misbehave after a downgrade,
+# and MetaTrader is not installed yet, so rebuild it from scratch when it changes.
+if [ -d "$PFX" ] && [ "$(cat "$H/.wine-version" 2>/dev/null || true)" != "$WINEVER" ]; then
+  echo "   Wine version changed - rebuilding the Wine folder from scratch."
+  systemctl stop gold-copier.service >/dev/null 2>&1 || true
+  sudo -u "$U" env WINEPREFIX="$PFX" wineserver -k >/dev/null 2>&1 || true
+  pkill -u "$U" -f mt5setup >/dev/null 2>&1 || true
+  sleep 2
+  rm -rf "$PFX"
+fi
 
 say "3/6 Creating user '$U' and the virtual desktop service"
 id "$U" >/dev/null 2>&1 || useradd -m -s /bin/bash "$U"
@@ -138,6 +161,8 @@ for f in GoldCopierMaster.mq5 GoldCopierSlave.mq5; do
 done
 sudo -u "$U" wget -qO "$H/gold-copier/mt5setup.exe" "$MT5_SETUP_URL"
 sudo -u "$U" env DISPLAY=:1 WINEPREFIX="$PFX" WINEDEBUG=-all WINEDLLOVERRIDES="mscoree=;mshtml=" wineboot -i >/dev/null 2>&1 || true
+echo "$WINEVER" > "$H/.wine-version"
+chown "$U:$U" "$H/.wine-version"
 sudo -u "$U" env DISPLAY=:1 WINEPREFIX="$PFX" WINEDEBUG=-all \
   wine reg add 'HKEY_CURRENT_USER\Software\Wine' /v Version /t REG_SZ /d win10 /f >/dev/null 2>&1 || true
 
