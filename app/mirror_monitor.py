@@ -107,6 +107,10 @@ class MirrorMonitor:
         self._user_log_backfilled = False
         self._user_log_seen: set[str] = set()
         self._history_checked_at = 0.0
+        self._started_at = datetime.now(timezone.utc)
+        self._polls = 0
+        self._seen_source_ids: set[str] = set(json.loads(self.store.get("seen_source_positions") or "[]"))
+        self._missed_reported: set[str] = set(json.loads(self.store.get("missed_source_positions") or "[]"))
         self._loaded = self._load_state()
 
     # -- persistence ----------------------------------------------------------------
@@ -137,6 +141,20 @@ class MirrorMonitor:
         source_positions = await self.rest.get_positions(s.source_account_id)
         target_positions = await self.rest.get_positions(s.target_account_id)
 
+        self._polls += 1
+        before = len(self._seen_source_ids)
+        self._seen_source_ids.update(str(p.get("id")) for p in source_positions)
+        if len(self._seen_source_ids) != before:
+            self.store.set("seen_source_positions", json.dumps(sorted(self._seen_source_ids)[-500:]))
+        if self._polls % 10 == 1:
+            # Proof of what MetaApi actually shows live on each account.
+            log.info(
+                "monitor_heartbeat",
+                polls=self._polls,
+                source_open=[f"{p.get('symbol')} {p.get('volume')} #{p.get('id')}" for p in source_positions],
+                target_open=[f"{p.get('symbol')} {p.get('volume')} #{p.get('id')}" for p in target_positions],
+            )
+
         new_source = {str(p.get("id")): _summary(p) for p in source_positions if p.get("symbol") == s.copy_symbol}
         new_target = {str(p.get("id")): _summary(p) for p in target_positions if p.get("symbol") == s.target_symbol}
         self.other_target_positions = sum(1 for p in target_positions if p.get("symbol") != s.target_symbol)
@@ -163,8 +181,13 @@ class MirrorMonitor:
         self._check_sync()
 
     async def _log_copy_history(self) -> None:
-        """Every 6 h, log CopyFactory's own record of copied deals (separate API host)."""
-        if time.time() - self._history_checked_at < 6 * 3600:
+        """Hourly: compare the source's real deal history with what MetaApi showed live.
+
+        A source trade that appears in deal history but was never visible in the live
+        positions list means MetaApi's live connection to the source is not reporting
+        trades, so CopyFactory cannot copy them either.
+        """
+        if time.time() - self._history_checked_at < 3600:
             return
         self._history_checked_at = time.time()
         try:
@@ -173,6 +196,36 @@ class MirrorMonitor:
             log.warning("copy_history_failed", error=f"{type(exc).__name__}: {exc}")
             return
         log.info("copyfactory_copy_history", **history)
+        copied_source_ids = {str(t.get("sourcePositionId")) for t in history.get("latest") or []}
+        deals = history.get("sourceLatest") or []
+        closes = {str(d.get("positionId")): d for d in deals if str(d.get("entryType", "")).endswith("OUT")}
+        for d in deals:
+            if not str(d.get("entryType", "")).endswith("IN"):
+                continue
+            pid = str(d.get("positionId"))
+            opened = _parse_time(d.get("time"))
+            if not opened or opened < self._started_at or pid in self._missed_reported:
+                continue
+            if datetime.now(timezone.utc) - opened < timedelta(minutes=5):
+                continue
+            seen_live = pid in self._seen_source_ids
+            copied = pid in copied_source_ids
+            if seen_live and copied:
+                continue
+            self._missed_reported.add(pid)
+            self.store.set("missed_source_positions", json.dumps(sorted(self._missed_reported)[-500:]))
+            closed = closes.get(pid, {}).get("time")
+            if not seen_live:
+                text = (
+                    f"🔴 Source trade #{pid} ({d.get('type')} {d.get('symbol')} {d.get('volume')}, opened {d.get('time')}"
+                    + (f", closed {closed}" if closed else "")
+                    + ") was NEVER visible in MetaApi's live positions for the source account.\n"
+                    "CopyFactory cannot copy trades MetaApi does not see. Redeploy the Gold Source account in MetaApi."
+                )
+            else:
+                text = f"🔴 Source trade #{pid} was visible live but CopyFactory did not copy it. Check CopyFactory logs."
+            self.store.event("error", "missed-trade", text, position_id=pid, seen_live=seen_live, copied=copied)
+            self.notifier.notify(text, kind="missed-trade")
 
     def _diff(self, side: str, old: dict, new: dict) -> None:
         s = self.settings

@@ -369,8 +369,6 @@ class CopyFactoryService:
             if obj.get("signalDelay"):
                 warnings.append(f"{label} signalDelay set: {obj.get('signalDelay')}")
             sides = obj.get("allowedSides")
-            if "allowedSides" in obj and sides is not None and not sides:
-                warnings.append(f"{label} allowedSides is an empty list (may block all trades)")
             if sides and set(sides) != {"buy", "sell"} and "all" not in sides:
                 warnings.append(f"{label} allowedSides={sides} (some trades will not copy)")
         if str(sub.get("closeOnly") or "") in PAUSED_CLOSE_ONLY:
@@ -458,29 +456,15 @@ class CopyFactoryService:
         """Remove settings that can silently stop CopyFactory from copying anything.
 
         Only *widens* what is copied for the configured route, never narrows it:
-        - an empty ``allowedSides`` list on our subscription is removed (missing
-          means "copy buy and sell", per MetaApi docs);
-        - the strategy symbol filter is made to include both the source symbol and
-          its mapped target symbol, so it matches whichever name CopyFactory checks.
+        the strategy symbol filter is made to include both the source symbol and
+        its mapped target symbol, so it matches whichever name CopyFactory checks.
+        (``allowedSides: []`` is MetaApi's own stored default for "no side filter",
+        so it is left alone.)
         Every other field is sent back unchanged. Idempotent: no write when nothing
         needs fixing.
         """
         changes: list[str] = []
         await self._adopt_strategy()
-        subscriber, _ = await self._read_subscription()
-
-        body = copy.deepcopy(subscriber)
-        body.pop("_id", None)
-        sub_changed = False
-        for sub in body.get("subscriptions") or []:
-            if str(sub.get("strategyId")) != self.strategy_id or sub.get("removed"):
-                continue
-            if "allowedSides" in sub and not sub.get("allowedSides"):
-                sub.pop("allowedSides")
-                sub_changed = True
-                changes.append("subscription: removed empty allowedSides [] (now copies buy and sell)")
-        if sub_changed:
-            await self.configuration.update_subscriber(self.settings.target_account_id, body)
 
         strategy = dict(await self.configuration.get_strategy(self.strategy_id))
         included = list((strategy.get("symbolFilter") or {}).get("included") or [])
@@ -493,8 +477,26 @@ class CopyFactoryService:
             await self.configuration.update_strategy(self.strategy_id, body)
             changes.append(f"strategy: symbolFilter.included {included} -> {body['symbolFilter']['included']}")
 
+        # Kick CopyFactory's subscriber state once per start, but only when neither side has
+        # an open route position, so the resync has nothing to open or close.
+        try:
+            source = await self.rest.get_positions(self.settings.source_account_id)
+            target = await self.rest.get_positions(self.settings.target_account_id)
+            flat = not any(p.get("symbol") == self.settings.copy_symbol for p in source) and not any(
+                p.get("symbol") == self.settings.target_symbol for p in target
+            )
+            if flat:
+                await self.copyfactory.trading_api.resynchronize(
+                    self.settings.target_account_id, strategy_ids=[self.strategy_id]
+                )
+                changes.append("subscriber resynchronized with strategy (both sides flat, nothing opened or closed)")
+            else:
+                log.info("resync_skipped", reason="open positions on source or target")
+        except Exception as exc:
+            log.warning("resync_failed", error=f"{type(exc).__name__}: {exc}")
+
         for change in changes:
-            self.store.event("warning", "copyfactory-repair", change)
+            self.store.event("warning" if "symbolFilter" in change else "info", "copyfactory-repair", change)
         if changes:
             await self.refresh()
         return changes

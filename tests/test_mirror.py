@@ -104,6 +104,9 @@ class FakeTrading:
     async def get_stopouts(self, subscriber_id):
         return list(self.stopouts)
 
+    async def resynchronize(self, subscriber_id, strategy_ids=None, position_ids=None):
+        self.resyncs = getattr(self, "resyncs", 0) + 1
+
     async def get_strategy_log(self, strategy_id, start_time=None, limit=1000, **kw):
         return [{"time": "t", "level": "INFO", "message": "signal"}]
 
@@ -295,28 +298,48 @@ def test_no_trade_code_exists():
     assert "from metaapi_cloud_sdk" not in src and "get_rpc_connection" not in src and "get_streaming_connection" not in src
 
 
-async def test_repair_removes_blocking_settings_only(env, monkeypatch, aiohttp_server):
-    _, cf_api, controller, _, _ = await _setup(monkeypatch, aiohttp_server)
+async def test_repair_widens_symbol_filter_only(env, monkeypatch, aiohttp_server):
+    fake, cf_api, controller, _, _ = await _setup(monkeypatch, aiohttp_server)
     cfg = cf_api.configuration_api
     cfg.subscriber["subscriptions"][0]["allowedSides"] = []
     changes = await controller.copyfactory.repair_blocking_settings()
-    assert len(changes) == 2
-    (_, _, sub_body), (_, sid, strat_body) = cfg.writes
-    assert "allowedSides" not in sub_body["subscriptions"][0]
-    assert sub_body["subscriptions"][0]["customField"] == "keep-me" and sub_body["name"] == "Gold Target Subscriber"
+    assert len(changes) == 2 and "resynchronized" in changes[1]
+    (kind, sid, strat_body), = cfg.writes
+    assert kind == "update_strategy"
     assert strat_body["symbolFilter"]["included"] == ["XAUUSD.f", "XAUUSDm"]
     assert strat_body["symbolMapping"] == [{"from": "XAUUSD.f", "to": "XAUUSDm"}]
     assert strat_body["tradeSizeScaling"] == {"mode": "fixedVolume", "tradeVolume": 0.01}
     assert "_id" not in strat_body and "platformCommissionRate" not in strat_body
-    # idempotent
+    # second run: no config write; resync only happens while flat
+    fake.positions[TGT] = [pos("T1", "XAUUSDm")]
     assert await controller.copyfactory.repair_blocking_settings() == []
-    assert len(cfg.writes) == 2
+    assert len(cfg.writes) == 1 and cf_api.trading_api.resyncs == 1
+    status = await controller.copyfactory.refresh()
+    assert status["warnings"] == []
 
 
-async def test_repair_keeps_explicit_side_filter(env, monkeypatch, aiohttp_server):
-    _, cf_api, controller, _, _ = await _setup(monkeypatch, aiohttp_server)
-    cfg = cf_api.configuration_api
-    cfg.subscriber["subscriptions"][0]["allowedSides"] = ["buy"]
-    cfg.strategy["symbolFilter"]["included"] = ["XAUUSD.f", "XAUUSDm"]
-    assert await controller.copyfactory.repair_blocking_settings() == []
-    assert cfg.writes == []
+async def test_missed_source_trade_is_reported(env, monkeypatch, aiohttp_server):
+    fake, _, controller, notifier, _ = await _setup(monkeypatch, aiohttp_server)
+    mon = controller.monitor
+    opened = (datetime.now(timezone.utc) - timedelta(minutes=30)).isoformat()
+    seen_open = (datetime.now(timezone.utc) - timedelta(minutes=20)).isoformat()
+    mon._started_at = datetime.now(timezone.utc) - timedelta(hours=1)
+
+    async def history(days=7):
+        return {"count": 1, "latest": [{"sourcePositionId": "SEEN"}],
+                "sourceLatest": [
+                    {"time": opened, "type": "DEAL_TYPE_SELL", "entryType": "DEAL_ENTRY_IN", "symbol": "XAUUSD.f", "volume": 0.0287, "positionId": "GHOST"},
+                    {"time": seen_open, "type": "DEAL_TYPE_BUY", "entryType": "DEAL_ENTRY_IN", "symbol": "XAUUSD.f", "volume": 0.0287, "positionId": "SEEN"},
+                ]}
+    monkeypatch.setattr(controller.copyfactory, "recent_copy_history", history)
+    fake.positions[SRC] = [pos("SEEN", "XAUUSD.f")]
+    await mon.cycle()  # history runs before positions; SEEN not yet seen on this first pass
+    drain(notifier)
+    mon._history_checked_at = 0
+    mon._missed_reported.clear()
+    await mon.cycle()
+    msgs = [m for m in drain(notifier) if "NEVER visible" in m or "did not copy" in m]
+    assert len(msgs) == 1 and "#GHOST" in msgs[0]
+    mon._history_checked_at = 0
+    await mon.cycle()
+    assert not [m for m in drain(notifier) if "GHOST" in m]  # reported once
