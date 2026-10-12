@@ -38,8 +38,14 @@ if [ -z "${GC_CHILD:-}" ]; then
     done
   fi
 
+  # Reuse the copy we are already running. Re-downloading risks picking up a
+  # stale copy from GitHub's CDN cache, which then runs instead of this one.
   SELF=/root/gold-copier-install.sh
-  curl -fsSL -o "$SELF" "$RAW/install.sh?v=$(date +%s)"
+  if [ -r "${0:-}" ] && [ "${0:-}" != "bash" ] && [ "${0:-}" != "-bash" ]; then
+    [ "$(readlink -f -- "$0")" = "$SELF" ] || cp -f -- "$0" "$SELF"
+  else
+    curl -fsSL -H 'Cache-Control: no-cache' -o "$SELF" "$RAW/install.sh?v=$(date +%s)"
+  fi
   chmod +x "$SELF"
   tmux kill-session -t goldcopier 2>/dev/null || true
   pkill -f "$SELF" 2>/dev/null || true
