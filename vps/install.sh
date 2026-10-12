@@ -23,11 +23,33 @@ PF="$PFX/drive_c/Program Files"
 say() { printf '\n\033[1;33m== %s\033[0m\n' "$*"; }
 [ "$(id -u)" = 0 ] || { echo "Run as root (ssh root@your-server)"; exit 1; }
 
-say "1/6 Choose a VNC password (6-8 characters) for viewing the MT5 screens"
-VNCPW=""
-while [ ${#VNCPW} -lt 6 ]; do
-  read -r -s -p "VNC password: " VNCPW < /dev/tty; echo
-done
+# Run inside tmux so a dropped SSH connection (sleeping laptop, wifi blip) cannot
+# kill the install half way. Reconnect with:  tmux attach -t goldcopier
+if [ -z "${TMUX:-}" ] && [ -z "${GC_NO_TMUX:-}" ]; then
+  export DEBIAN_FRONTEND=noninteractive
+  command -v tmux >/dev/null 2>&1 || { apt-get update -y >/dev/null 2>&1; apt-get install -y tmux >/dev/null 2>&1; }
+  if command -v tmux >/dev/null 2>&1; then
+    SELF=/root/gold-copier-install.sh
+    curl -fsSL -o "$SELF" "https://raw.githubusercontent.com/Boymyke/copy-trading-bot/main/vps/install.sh"
+    chmod +x "$SELF"
+    tmux kill-session -t goldcopier 2>/dev/null || true
+    echo "Starting the installer in a session that survives disconnects."
+    echo "If your connection drops, just SSH back in and run:  tmux attach -t goldcopier"
+    sleep 2
+    exec tmux new -s goldcopier "$SELF; echo; echo '=== installer finished - scroll up to read, then press Ctrl+C ==='; sleep 86400"
+  fi
+fi
+
+say "1/6 VNC password (for viewing the MT5 screens)"
+if [ -f /home/trader/.vnc/passwd ]; then
+  echo "   Keeping the VNC password you already set."
+  VNCPW=""
+else
+  VNCPW=""
+  while [ ${#VNCPW} -lt 6 ]; do
+    read -r -s -p "Choose a VNC password (6-8 characters): " VNCPW < /dev/tty; echo
+  done
+fi
 
 say "2/6 Installing system packages and Wine (5-10 minutes)"
 export DEBIAN_FRONTEND=noninteractive
@@ -44,7 +66,9 @@ apt-get install -y --install-recommends winehq-stable
 say "3/6 Creating user '$U' and the virtual desktop service"
 id "$U" >/dev/null 2>&1 || useradd -m -s /bin/bash "$U"
 mkdir -p "$H/.vnc"
-x11vnc -storepasswd "$VNCPW" "$H/.vnc/passwd" >/dev/null
+if [ -n "$VNCPW" ]; then
+  x11vnc -storepasswd "$VNCPW" "$H/.vnc/passwd" >/dev/null
+fi
 chown -R "$U:$U" "$H/.vnc"
 
 cat > /usr/local/bin/gold-copier-desktop <<'EOS'
@@ -58,7 +82,8 @@ sleep 3
 while kill -0 "$XV" 2>/dev/null; do
   pgrep -u trader -x fluxbox >/dev/null || (fluxbox >/dev/null 2>&1 &)
   pgrep -u trader -x x11vnc >/dev/null || x11vnc -display :1 -localhost -rfbport 5900 -forever -shared \
-      -rfbauth "$HOME/.vnc/passwd" -bg -quiet -o "$HOME/x11vnc.log"
+      -rfbauth "$HOME/.vnc/passwd" -bg -quiet -o "$HOME/x11vnc.log" \
+      || echo "$(date -u) x11vnc failed to start" >> "$HOME/watchdog.log"
   if [ -f "$HOME/.copier-ready" ]; then
     for d in "MT5 Source" "MT5 Target"; do
       if ! pgrep -u trader -f "$d.terminal64" >/dev/null; then
@@ -103,18 +128,31 @@ sudo -u "$U" env DISPLAY=:1 WINEPREFIX="$PFX" WINEDEBUG=-all \
   wine reg add 'HKEY_CURRENT_USER\Software\Wine' /v Version /t REG_SZ /d win10 /f >/dev/null 2>&1 || true
 
 if [ ! -f "$PF/MetaTrader 5/terminal64.exe" ]; then
-  say "5/6 ACTION NEEDED: open VNC now and click through the MetaTrader 5 installer"
-  echo "   On your Mac: Finder > Go > Connect to Server > vnc://localhost:5901"
-  echo "   (keep this SSH window open — it carries the secure tunnel)"
-  echo "   Click 'Next' / 'Finish'. If MT5 opens afterwards, just close it."
+  say "5/6 Installing MetaTrader 5 (silent - no clicking needed, up to 10 minutes)"
   sudo -u "$U" env DISPLAY=:1 WINEPREFIX="$PFX" WINEDEBUG=-all \
-    nohup wine "$H/gold-copier/mt5setup.exe" >/dev/null 2>&1 &
-  for i in $(seq 1 360); do
+    nohup wine "$H/gold-copier/mt5setup.exe" /auto >/dev/null 2>&1 &
+  for i in $(seq 1 60); do
     [ -f "$PF/MetaTrader 5/terminal64.exe" ] && break
-    sleep 5
+    sleep 10
   done
-  [ -f "$PF/MetaTrader 5/terminal64.exe" ] || { echo "MT5 was not installed after 30 min. Re-run this script."; exit 1; }
-  echo "   MetaTrader 5 installed. Finishing in 30 seconds..."
+
+  if [ ! -f "$PF/MetaTrader 5/terminal64.exe" ]; then
+    say "5/6 Silent install did not finish - open VNC and click through the installer"
+    echo "   On your Mac: Finder > Go > Connect to Server > vnc://localhost:5901"
+    echo "   Click 'Next' / 'Finish'. If MT5 opens afterwards, just close it."
+    echo "   (this window is safe to leave - it survives a dropped connection)"
+    sudo -u "$U" env WINEPREFIX="$PFX" wineserver -k >/dev/null 2>&1 || true
+    sleep 3
+    sudo -u "$U" env DISPLAY=:1 WINEPREFIX="$PFX" WINEDEBUG=-all \
+      nohup wine "$H/gold-copier/mt5setup.exe" >/dev/null 2>&1 &
+    for i in $(seq 1 360); do
+      [ -f "$PF/MetaTrader 5/terminal64.exe" ] && break
+      sleep 10
+    done
+  fi
+
+  [ -f "$PF/MetaTrader 5/terminal64.exe" ] || { echo "MetaTrader 5 was not installed. Re-run this script."; exit 1; }
+  echo "   MetaTrader 5 installed. Settling for 30 seconds..."
   sleep 30
 fi
 sudo -u "$U" env WINEPREFIX="$PFX" wineserver -k || true
