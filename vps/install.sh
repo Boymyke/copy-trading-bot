@@ -133,6 +133,15 @@ sudo -u "$U" env DISPLAY=:1 WINEPREFIX="$PFX" WINEDEBUG=-all WINEDLLOVERRIDES="m
 sudo -u "$U" env DISPLAY=:1 WINEPREFIX="$PFX" WINEDEBUG=-all \
   wine reg add 'HKEY_CURRENT_USER\Software\Wine' /v Version /t REG_SZ /d win10 /f >/dev/null 2>&1 || true
 
+# MetaQuotes' installer aborts with "A debugger has been found running in your
+# system" because Wine registers its own crash debugger. Remove those keys.
+for k in 'HKLM\Software\Microsoft\Windows NT\CurrentVersion\AeDebug' \
+         'HKLM\Software\Wow6432Node\Microsoft\Windows NT\CurrentVersion\AeDebug'; do
+  sudo -u "$U" env DISPLAY=:1 WINEPREFIX="$PFX" WINEDEBUG=-all \
+    wine reg delete "$k" /f >/dev/null 2>&1 || true
+done
+pkill -u "$U" -f mt5setup >/dev/null 2>&1 || true
+
 if [ ! -f "$PF/MetaTrader 5/terminal64.exe" ]; then
   say "5/6 Installing MetaTrader 5 (silent - no clicking needed, up to 10 minutes)"
   sudo -u "$U" env DISPLAY=:1 WINEPREFIX="$PFX" WINEDEBUG=-all \
