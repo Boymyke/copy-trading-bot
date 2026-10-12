@@ -85,8 +85,9 @@ class FakeConfiguration:
         self.writes.append(("update_subscriber", subscriber_id, copy.deepcopy(body)))
         self.subscriber = {"_id": subscriber_id, **copy.deepcopy(body)}
 
-    async def update_strategy(self, *a, **k):
-        raise AssertionError("must never write strategies")
+    async def update_strategy(self, strategy_id, body):
+        self.writes.append(("update_strategy", strategy_id, copy.deepcopy(body)))
+        self.strategy = {"_id": strategy_id, "platformCommissionRate": 0, **copy.deepcopy(body)}
 
     async def generate_strategy_id(self):
         raise AssertionError("must never create strategies")
@@ -289,6 +290,33 @@ async def test_copy_history_is_read(env, monkeypatch, aiohttp_server):
 def test_no_trade_code_exists():
     src = "\n".join(p.read_text() for p in Path("app").glob("*.py"))
     for forbidden in ("modify_position", "create_market", "close_position", "/trade", "session.post(url, json",
-                      "session.put", "session.delete", "update_strategy(", "generate_strategy_id", "remove_subscri"):
+                      "session.put", "session.delete", "generate_strategy_id", "remove_subscri", "remove_strategy"):
         assert forbidden not in src, forbidden
     assert "from metaapi_cloud_sdk" not in src and "get_rpc_connection" not in src and "get_streaming_connection" not in src
+
+
+async def test_repair_removes_blocking_settings_only(env, monkeypatch, aiohttp_server):
+    _, cf_api, controller, _, _ = await _setup(monkeypatch, aiohttp_server)
+    cfg = cf_api.configuration_api
+    cfg.subscriber["subscriptions"][0]["allowedSides"] = []
+    changes = await controller.copyfactory.repair_blocking_settings()
+    assert len(changes) == 2
+    (_, _, sub_body), (_, sid, strat_body) = cfg.writes
+    assert "allowedSides" not in sub_body["subscriptions"][0]
+    assert sub_body["subscriptions"][0]["customField"] == "keep-me" and sub_body["name"] == "Gold Target Subscriber"
+    assert strat_body["symbolFilter"]["included"] == ["XAUUSD.f", "XAUUSDm"]
+    assert strat_body["symbolMapping"] == [{"from": "XAUUSD.f", "to": "XAUUSDm"}]
+    assert strat_body["tradeSizeScaling"] == {"mode": "fixedVolume", "tradeVolume": 0.01}
+    assert "_id" not in strat_body and "platformCommissionRate" not in strat_body
+    # idempotent
+    assert await controller.copyfactory.repair_blocking_settings() == []
+    assert len(cfg.writes) == 2
+
+
+async def test_repair_keeps_explicit_side_filter(env, monkeypatch, aiohttp_server):
+    _, cf_api, controller, _, _ = await _setup(monkeypatch, aiohttp_server)
+    cfg = cf_api.configuration_api
+    cfg.subscriber["subscriptions"][0]["allowedSides"] = ["buy"]
+    cfg.strategy["symbolFilter"]["included"] = ["XAUUSD.f", "XAUUSDm"]
+    assert await controller.copyfactory.repair_blocking_settings() == []
+    assert cfg.writes == []

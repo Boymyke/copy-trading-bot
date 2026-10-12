@@ -45,6 +45,7 @@ class Controller:
         self.last_cf_status: Dict[str, Any] = {}
         self.started_at = time.time()
         self._diagnostics_at = 0.0
+        self._repair_done = False
         # The pause state lives in MetaApi (subscription.closeOnly); forget any local copy until read.
         self.store.set("copy_paused", "")
 
@@ -77,6 +78,19 @@ class Controller:
                 self.copyfactory_error = None
                 reported_error = None
                 failures = 0
+                if not self._repair_done:
+                    self._repair_done = True
+                    try:
+                        changes = await self.copyfactory.repair_blocking_settings()
+                    except Exception as exc:
+                        log.warning("copyfactory_repair_failed", error=f"{type(exc).__name__}: {exc}")
+                        self._repair_done = False
+                        changes = []
+                    if changes:
+                        status = self.copyfactory.status()
+                        self.last_cf_status = status
+                        log.info("copyfactory_repaired", changes=changes)
+                        self.notifier.notify("🔧 Fixed CopyFactory settings that could block copying:\n• " + "\n• ".join(changes), kind="copyfactory-repair")
                 warnings = tuple(status.get("warnings") or ())
                 if warnings != reported_warnings:
                     reported_warnings = warnings

@@ -8,9 +8,9 @@ Rules this service follows:
   target account.
 * Its periodic refresh is **read-only**. It validates the remote configuration
   and reports mismatches as warnings; it never "corrects" them.
-* Writes happen only when the operator explicitly asks (``/pause``, ``/resume``),
-  and they are read-modify-write: the current remote object is fetched, exactly
-  one field (``closeOnly``) is changed, and everything else is sent back as-is.
+* Writes are read-modify-write of single fields: ``closeOnly`` on ``/pause`` and
+  ``/resume``, and ``repair_blocking_settings`` (runs once per start, only widens
+  what is copied for the configured route). Everything else is sent back as-is.
 * It never deploys/undeploys accounts and opens no websocket connections
   (CopyFactory configuration and MetaApi provisioning are plain REST).
 """
@@ -369,6 +369,8 @@ class CopyFactoryService:
             if obj.get("signalDelay"):
                 warnings.append(f"{label} signalDelay set: {obj.get('signalDelay')}")
             sides = obj.get("allowedSides")
+            if "allowedSides" in obj and sides is not None and not sides:
+                warnings.append(f"{label} allowedSides is an empty list (may block all trades)")
             if sides and set(sides) != {"buy", "sell"} and "all" not in sides:
                 warnings.append(f"{label} allowedSides={sides} (some trades will not copy)")
         if str(sub.get("closeOnly") or "") in PAUSED_CLOSE_ONLY:
@@ -451,6 +453,51 @@ class CopyFactoryService:
             "stopouts": self.stopouts,
             "accounts": self.accounts,
         }
+
+    async def repair_blocking_settings(self) -> list[str]:
+        """Remove settings that can silently stop CopyFactory from copying anything.
+
+        Only *widens* what is copied for the configured route, never narrows it:
+        - an empty ``allowedSides`` list on our subscription is removed (missing
+          means "copy buy and sell", per MetaApi docs);
+        - the strategy symbol filter is made to include both the source symbol and
+          its mapped target symbol, so it matches whichever name CopyFactory checks.
+        Every other field is sent back unchanged. Idempotent: no write when nothing
+        needs fixing.
+        """
+        changes: list[str] = []
+        await self._adopt_strategy()
+        subscriber, _ = await self._read_subscription()
+
+        body = copy.deepcopy(subscriber)
+        body.pop("_id", None)
+        sub_changed = False
+        for sub in body.get("subscriptions") or []:
+            if str(sub.get("strategyId")) != self.strategy_id or sub.get("removed"):
+                continue
+            if "allowedSides" in sub and not sub.get("allowedSides"):
+                sub.pop("allowedSides")
+                sub_changed = True
+                changes.append("subscription: removed empty allowedSides [] (now copies buy and sell)")
+        if sub_changed:
+            await self.configuration.update_subscriber(self.settings.target_account_id, body)
+
+        strategy = dict(await self.configuration.get_strategy(self.strategy_id))
+        included = list((strategy.get("symbolFilter") or {}).get("included") or [])
+        wanted = [self.settings.copy_symbol, self.settings.target_symbol]
+        if included and any(sym not in included for sym in wanted):
+            body = copy.deepcopy(strategy)
+            for key in ("_id", "platformCommissionRate", "closeOnRemovalMode"):
+                body.pop(key, None)
+            body["symbolFilter"]["included"] = included + [sym for sym in wanted if sym not in included]
+            await self.configuration.update_strategy(self.strategy_id, body)
+            changes.append(f"strategy: symbolFilter.included {included} -> {body['symbolFilter']['included']}")
+
+        for change in changes:
+            self.store.event("warning", "copyfactory-repair", change)
+        if changes:
+            await self.refresh()
+        return changes
 
     async def set_paused(self, paused: bool) -> None:
         """Toggle closeOnly on our one subscription; every other field is preserved."""
