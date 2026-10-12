@@ -28,7 +28,10 @@ say() { printf '\n\033[1;33m== %s\033[0m\n' "$*"; }
 if [ -z "${TMUX:-}" ] && [ -z "${GC_NO_TMUX:-}" ]; then
   export DEBIAN_FRONTEND=noninteractive
   command -v tmux >/dev/null 2>&1 || { apt-get update -y >/dev/null 2>&1; apt-get install -y tmux >/dev/null 2>&1; }
-  if command -v tmux >/dev/null 2>&1; then
+  # `curl ... | bash` leaves stdin on the pipe, and tmux refuses to start without
+  # a terminal, so take one from /dev/tty. If there is none (cron, no tty), just
+  # carry on unprotected rather than failing.
+  if command -v tmux >/dev/null 2>&1 && [ -c /dev/tty ]; then
     SELF=/root/gold-copier-install.sh
     curl -fsSL -o "$SELF" "https://raw.githubusercontent.com/Boymyke/copy-trading-bot/main/vps/install.sh"
     chmod +x "$SELF"
@@ -36,8 +39,11 @@ if [ -z "${TMUX:-}" ] && [ -z "${GC_NO_TMUX:-}" ]; then
     echo "Starting the installer in a session that survives disconnects."
     echo "If your connection drops, just SSH back in and run:  tmux attach -t goldcopier"
     sleep 2
-    exec tmux new -s goldcopier "$SELF; echo; echo '=== installer finished - scroll up to read, then press Ctrl+C ==='; sleep 86400"
+    exec tmux new -s goldcopier \
+      "$SELF; echo; echo '=== installer finished - scroll up to read, then press Ctrl+C ==='; sleep 86400" \
+      < /dev/tty > /dev/tty 2>&1
   fi
+  echo "Note: running without a protected session - keep this window awake."
 fi
 
 say "1/6 VNC password (for viewing the MT5 screens)"
