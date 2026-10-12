@@ -164,6 +164,75 @@ class CopyFactoryService:
             result["strategyLogError"] = f"{type(exc).__name__}: {exc}"
         return result
 
+    async def diagnostics(self) -> dict:
+        """Read-only snapshot of everything CopyFactory knows about this route.
+
+        Used to find out *why* trades are not being copied: whether the strategy
+        sees the source trades at all (provided transactions), whether signals are
+        pending for the subscriber, and whether duplicate strategies/subscribers exist.
+        """
+        from datetime import datetime, timedelta, timezone
+
+        till = datetime.now(timezone.utc)
+        since = till - timedelta(days=7)
+        out: dict[str, Any] = {}
+
+        async def attempt(key, coro_factory):
+            try:
+                out[key] = await coro_factory()
+            except Exception as exc:
+                out[key + "Error"] = f"{type(exc).__name__}: {exc}"
+
+        async def strategies():
+            items = await self.configuration.get_strategies_with_infinite_scroll_pagination()
+            return [{k: s.get(k) for k in ("_id", "name", "accountId", "removed")} for s in items or []]
+
+        async def subscribers():
+            items = await self.configuration.get_subscribers_with_infinite_scroll_pagination()
+            return [
+                {
+                    "_id": s.get("_id"),
+                    "name": s.get("name"),
+                    "removed": s.get("removed"),
+                    "subscriptions": [
+                        {k: v for k, v in sub.items() if k in ("strategyId", "closeOnly", "allowedSides", "removed", "multiplier", "symbolFilter")}
+                        for sub in (s.get("subscriptions") or [])
+                    ],
+                }
+                for s in items or []
+            ]
+
+        async def provided():
+            txs = await self.copyfactory.history_api.get_provided_transactions(
+                since, till, strategy_ids=[self.strategy_id] if self.strategy_id else None, limit=1000
+            )
+            return {
+                "count": len(txs or []),
+                "latest": [
+                    {k: str(t.get(k)) for k in ("time", "type", "symbol", "positionId", "slavePositionId", "subscriberId", "quantity")}
+                    for t in (txs or [])[-10:]
+                ],
+            }
+
+        async def signals():
+            client = await self.copyfactory.trading_api.get_subscriber_signal_client(self.settings.target_account_id)
+            return [dict(x) for x in (await client.get_trading_signals() or [])][:20]
+
+        async def account(account_id):
+            acc = await self.rest.get_account(account_id)
+            keep = ("name", "type", "version", "platform", "application", "region", "reliability", "state",
+                    "connectionStatus", "copyFactoryRoles", "copyFactoryResourceSlots", "resourceSlots",
+                    "server", "login", "baseCurrency", "manualTrades", "riskManagementApiEnabled")
+            return {k: acc.get(k) for k in keep if k in acc}
+
+        await attempt("strategies", strategies)
+        await attempt("subscribers", subscribers)
+        await attempt("providedTransactions7d", provided)
+        await attempt("pendingSubscriberSignals", signals)
+        await attempt("sourceAccount", lambda: account(self.settings.source_account_id))
+        await attempt("targetAccount", lambda: account(self.settings.target_account_id))
+        return out
+
     async def get_stopouts(self) -> list:
         return [dict(s) for s in (await self.copyfactory.trading_api.get_stopouts(self.settings.target_account_id) or [])]
 

@@ -44,6 +44,7 @@ class Controller:
         self.copyfactory_checked_at: Optional[float] = None
         self.last_cf_status: Dict[str, Any] = {}
         self.started_at = time.time()
+        self._diagnostics_at = 0.0
         # The pause state lives in MetaApi (subscription.closeOnly); forget any local copy until read.
         self.store.set("copy_paused", "")
 
@@ -89,6 +90,12 @@ class Controller:
                     else:
                         log.info("copyfactory_config_ok", active=status["active"])
                 self.copyfactory_checked_at = time.time()
+                if time.time() - self._diagnostics_at > 6 * 3600:
+                    self._diagnostics_at = time.time()
+                    try:
+                        log.info("copyfactory_diagnostics", **(await self.copyfactory.diagnostics()))
+                    except Exception as exc:
+                        log.warning("copyfactory_diagnostics_failed", error=f"{type(exc).__name__}: {exc}")
                 await asyncio.sleep(self.settings.copyfactory_refresh_seconds)
             except asyncio.CancelledError:
                 raise
