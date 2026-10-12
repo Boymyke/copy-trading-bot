@@ -229,8 +229,16 @@ class CopyFactoryService:
         await attempt("subscribers", subscribers)
         await attempt("providedTransactions7d", provided)
         await attempt("pendingSubscriberSignals", signals)
+        async def terminal(account_id):
+            info = await self.rest.get_account_information(account_id)
+            keep = ("platform", "type", "broker", "server", "currency", "marginMode", "tradeAllowed",
+                    "investorMode", "leverage", "balance", "equity", "freeMargin", "name", "login")
+            return {k: info.get(k) for k in keep if k in info}
+
         await attempt("sourceAccount", lambda: account(self.settings.source_account_id))
         await attempt("targetAccount", lambda: account(self.settings.target_account_id))
+        await attempt("sourceTerminal", lambda: terminal(self.settings.source_account_id))
+        await attempt("targetTerminal", lambda: terminal(self.settings.target_account_id))
         return out
 
     async def get_stopouts(self) -> list:
