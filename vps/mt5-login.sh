@@ -64,7 +64,7 @@ pkill -u trader -f "$D.terminal64" 2>/dev/null || true
 for i in $(seq 1 15); do pgrep -u trader -f "$D.terminal64" >/dev/null || break; sleep 1; done
 
 sudo -u trader env DISPLAY=:1 WINEPREFIX="$H/.mt5" WINEDEBUG=-all \
-  bash -c "cd \"$PF/$D\" && nohup wine terminal64.exe /portable /config:C:\\gc-login.ini >/dev/null 2>&1 &"
+  bash -c "cd \"$PF/$D\" && nohup wine terminal64.exe /portable /config:C:\\\\gc-login.ini >/dev/null 2>&1 &"
 
 echo "Waiting 60 seconds for it to connect..."
 sleep 60
