@@ -100,6 +100,10 @@ read -rs -p "   Paste the bot token (Cmd+V, nothing shows), then Enter: " T </de
 [ -n "$T" ] && TOKEN="$T"
 read -r  -p "   Your chat id (Enter = find it for me): " CI </dev/tty
 [ -n "$CI" ] && CHAT="$CI"
+if [ -n "$CHAT" ] && ! [[ "$CHAT" =~ ^-?[0-9]+$ ]]; then
+  echo "   \"$CHAT\" is not a chat id (it is a number) - I'll find it for you instead."
+  CHAT=""
+fi
 if [ -n "$TOKEN" ]; then
   if ! curl -fsS "https://api.telegram.org/bot$TOKEN/getMe" >/dev/null 2>&1; then
     bad "Telegram rejected that bot token - alerts stay OFF. Re-run this script to try again."
@@ -129,13 +133,13 @@ if [ -n "$TOKEN" ] && [ -n "$CHAT" ]; then
   if curl -fsS "https://api.telegram.org/bot$TOKEN/sendMessage" --data-urlencode "chat_id=$CHAT" \
        --data-urlencode "text=✅ Gold copier VPS: Telegram connected. You will get a message for every copied trade." >/dev/null; then
     ok "test message sent - check Telegram"
+    umask 077
+    printf 'token=%s\r\nchat=%s\r\n' "$TOKEN" "$CHAT" > "$TGF"
+    chown "$U:$U" "$TGF"; chmod 600 "$TGF"
+    umask 022
   else
-    bad "could not send to chat $CHAT - check the chat id"
+    bad "could not send to chat $CHAT - Telegram not saved. Re-run and press Enter at the chat id question."
   fi
-  umask 077
-  printf 'token=%s\r\nchat=%s\r\n' "$TOKEN" "$CHAT" > "$TGF"
-  chown "$U:$U" "$TGF"; chmod 600 "$TGF"
-  umask 022
 else
   echo "   Telegram skipped - the copier still works, just without messages."
 fi
