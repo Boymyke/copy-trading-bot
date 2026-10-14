@@ -91,8 +91,8 @@ mkdir -p "$COMMON/Files"; chown -R "$U:$U" "$C/users/$U/AppData/Roaming/MetaQuot
 TGF="$COMMON/Files/gold_copier_telegram.txt"
 TOKEN=""; CHAT=""
 if [ -f "$TGF" ]; then
-  TOKEN=$(grep '^token=' "$TGF" | cut -d= -f2- || true)
-  CHAT=$(grep '^chat=' "$TGF" | cut -d= -f2- || true)
+  TOKEN=$(grep '^token=' "$TGF" | cut -d= -f2- | tr -d '\r' || true)
+  CHAT=$(grep '^chat=' "$TGF" | cut -d= -f2- | tr -d '\r' || true)
   echo "   Telegram is already set up (chat $CHAT). Press Enter at both questions to keep it."
 fi
 echo "   Your bot token is in Railway (variable TELEGRAM_BOT_TOKEN) or from @BotFather in Telegram."
