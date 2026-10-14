@@ -124,8 +124,11 @@ while kill -0 "$XV" 2>/dev/null; do
   if [ -f "$HOME/.copier-ready" ]; then
     for d in "MT5 Source" "MT5 Target"; do
       if ! pgrep -u trader -f "$d.terminal64" >/dev/null; then
-        echo "$(date -u) starting $d" >> "$HOME/watchdog.log"
-        (cd "$PF/$d" && nohup wine "$PF/$d/terminal64.exe" /portable >/dev/null 2>&1 &)
+        CFG=""
+        role=$(cat "$PF/$d/gc_role" 2>/dev/null || true)
+        [ -n "$role" ] && [ -f "$WINEPREFIX/drive_c/gc_$role.ini" ] && CFG="/config:C:\\gc_$role.ini"
+        echo "$(date -u) starting $d $CFG" >> "$HOME/watchdog.log"
+        (cd "$PF/$d" && nohup wine "$PF/$d/terminal64.exe" /portable $CFG >/dev/null 2>&1 &)
       fi
     done
   fi
