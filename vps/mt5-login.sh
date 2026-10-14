@@ -42,19 +42,42 @@ read -r  -p "Server name (exactly as your phone shows it): " SERVER </dev/tty
 read -rs -p "Password (paste with Cmd+V - nothing will show), then Enter: " PASS </dev/tty; echo
 [ -n "$LOGIN" ] && [ -n "$SERVER" ] && [ -n "$PASS" ] || { echo "Something was empty - nothing changed."; exit 1; }
 
-# Path must have no spaces: MT5 mis-parses a quoted /config:"...Program Files..." argument.
-INI="$H/.mt5/drive_c/gc-login.ini"
+C="$H/.mt5/drive_c"
+ROLE=$(cat "$PF/$D/gc_role" 2>/dev/null || true)
 umask 077
-printf '[Common]\r\nLogin=%s\r\nPassword=%s\r\nServer=%s\r\nKeepPrivate=1\r\n' \
-  "$LOGIN" "$PASS" "$SERVER" > "$INI"
+if [ -n "$ROLE" ] && [ -f "$C/gc_$ROLE.ini" ]; then
+  # Copier already set up: keep the login inside this terminal's permanent start-up config,
+  # so it logs itself back in after every restart/reboot (file readable by root/trader only).
+  INI="$C/gc_$ROLE.ini"; CFGNAME="gc_$ROLE.ini"; KEEP=1
+  GC_LOGIN="$LOGIN" GC_PASS="$PASS" GC_SERVER="$SERVER" python3 - "$INI" <<'PY'
+import os, sys
+p = sys.argv[1]
+raw = open(p, 'rb').read().decode('utf-8', 'replace').replace('\r', '')
+out, skip = [], False
+for line in raw.split('\n'):
+    if line.startswith('['):
+        skip = (line.strip() == '[Common]')
+    if not skip and line != '':
+        out.append(line)
+common = ['[Common]', 'Login=' + os.environ['GC_LOGIN'], 'Password=' + os.environ['GC_PASS'],
+          'Server=' + os.environ['GC_SERVER'], 'KeepPrivate=1']
+open(p, 'wb').write(('\r\n'.join(common + out) + '\r\n').encode())
+PY
+else
+  # Path must have no spaces: MT5 mis-parses a quoted /config:"...Program Files..." argument.
+  INI="$C/gc-login.ini"; CFGNAME="gc-login.ini"; KEEP=0
+  printf '[Common]\r\nLogin=%s\r\nPassword=%s\r\nServer=%s\r\nKeepPrivate=1\r\n' \
+    "$LOGIN" "$PASS" "$SERVER" > "$INI"
+fi
 unset PASS
-chown trader:trader "$INI"
+chown trader:trader "$INI"; chmod 600 "$INI"
+umask 022
 
 # Stop the watchdog from restarting the terminal (without the config) while we swap it.
 READY="$H/.copier-ready"; HAD_READY=0
 [ -f "$READY" ] && { HAD_READY=1; rm -f "$READY"; }
 cleanup() {
-  shred -u "$INI" 2>/dev/null || rm -f "$INI"
+  [ "$KEEP" = 1 ] || shred -u "$INI" 2>/dev/null || rm -f "$INI"
   [ "$HAD_READY" = 1 ] && sudo -u trader touch "$READY"
 }
 trap cleanup EXIT
@@ -64,7 +87,7 @@ pkill -u trader -f "$D.terminal64" 2>/dev/null || true
 for i in $(seq 1 15); do pgrep -u trader -f "$D.terminal64" >/dev/null || break; sleep 1; done
 
 sudo -u trader env DISPLAY=:1 WINEPREFIX="$H/.mt5" WINEDEBUG=-all \
-  bash -c "cd \"$PF/$D\" && nohup wine terminal64.exe /portable /config:C:\\\\gc-login.ini >/dev/null 2>&1 &"
+  bash -c "cd \"$PF/$D\" && nohup wine terminal64.exe /portable /config:C:\\\\$CFGNAME >/dev/null 2>&1 &"
 
 echo "Waiting 60 seconds for it to connect..."
 sleep 60

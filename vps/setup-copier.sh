@@ -154,10 +154,18 @@ printf 'SourceSymbol=%s\r\nFeedName=gold_copier_feed\r\nPublishMs=100\r\n' "$MAS
 printf 'TargetSymbol=%s\r\nBaseLot=0.01\r\nBalancePerBaseLot=0\r\nMaxLot=1.00\r\nFeedName=gold_copier_feed\r\nMagic=26101201\r\nSlippagePoints=300\r\nMaxOpenDelaySec=120\r\nMaxFeedAgeSec=10\r\nCloseConfirmMs=400\r\nTimerMs=100\r\nTelegramBotToken=\r\nTelegramChatId=\r\nDailyReportHourGMT=7\r\n' "$SLAVE_SYMBOL" \
   | utf16 > "$C/gc_slave/MQL5/Presets/gc_slave.set"
 for role in master slave; do
+  # keep a saved login ([Common] block written by mt5-login.sh) when rewriting the config
+  COMMON_BLOCK=""
+  if [ -f "$C/gc_$role.ini" ]; then
+    COMMON_BLOCK=$(tr -d '\r' < "$C/gc_$role.ini" | awk '/^\[/{f=($0=="[Common]")} f' | sed 's/$/\r/' || true)
+  fi
   sym=$([ $role = master ] && echo "$MASTER_SYMBOL" || echo "$SLAVE_SYMBOL")
   ea=$([ $role = master ] && echo GoldCopierMaster || echo GoldCopierSlave)
   printf '[Experts]\r\nAllowLiveTrading=1\r\nAllowDllImport=0\r\nEnabled=1\r\nAccount=0\r\nProfile=0\r\nWebRequest=1\r\nWebRequestUrl=https://api.telegram.org\r\n[StartUp]\r\nExpert=GoldCopier\\%s\r\nExpertParameters=gc_%s.set\r\nSymbol=%s\r\nPeriod=M1\r\n' \
-    "$ea" "$role" "$sym" > "$C/gc_$role.ini"
+    "$ea" "$role" "$sym" > "$C/gc_$role.ini.new"
+  { [ -n "$COMMON_BLOCK" ] && printf '%s\n' "$COMMON_BLOCK"; cat "$C/gc_$role.ini.new"; } > "$C/gc_$role.ini"
+  rm -f "$C/gc_$role.ini.new"
+  chmod 600 "$C/gc_$role.ini"
 done
 chown -R "$U:$U" "$C/gc_master/MQL5/Presets" "$C/gc_slave/MQL5/Presets" "$C/gc_master.ini" "$C/gc_slave.ini"
 ok "settings written"
