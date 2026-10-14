@@ -197,6 +197,7 @@ mv -f /usr/local/bin/gold-copier-desktop.new /usr/local/bin/gold-copier-desktop
 # ---------------------------------------------------------------- 5
 say "5/5 Restarting both terminals (your VNC window will blink - just reconnect if it closes)"
 sudo -u "$U" touch "$H/.copier-ready"
+pkill -u "$U" -f 'gc-login\.ini' 2>/dev/null || true   # leftovers from mt5-login.sh
 START=$(date +%s)
 systemctl restart gold-copier.service
 echo "   Waiting 90 seconds for both terminals to log in and start the EAs..."

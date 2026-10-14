@@ -72,6 +72,8 @@ string g_settings_file;
 // ---- single instance (a second chart with this EA must not trade) ---
 string g_lock_name, g_hb_name;
 bool   g_have_lock = false;
+bool   g_sym_ok = false;
+ulong  g_sym_wait = 0;
 ulong  g_lock_wait_since = 0;
 ulong  g_last_hb = 0;
 
@@ -80,11 +82,7 @@ ulong NowMs() { return(GetMicrosecondCount() / 1000); }
 //+------------------------------------------------------------------+
 int OnInit()
   {
-   if(!SymbolSelect(TargetSymbol, true))
-     {
-      Alert("GoldCopierSlave: symbol ", TargetSymbol, " not found on this account");
-      return(INIT_FAILED);
-     }
+   g_sym_ok = SymbolSelect(TargetSymbol, true);   // may time out right after start-up; retried in OnTimer
    string login = IntegerToString(AccountInfoInteger(ACCOUNT_LOGIN));
    g_state_file    = "gold_copier_state_" + login + ".txt";
    g_settings_file = "gold_copier_lot_" + login + ".txt";
@@ -154,6 +152,18 @@ bool HoldLock()
 //+------------------------------------------------------------------+
 void OnTimer()
   {
+   if(!g_sym_ok)
+     {
+      g_sym_ok = SymbolSelect(TargetSymbol, true);
+      if(!g_sym_ok)
+        {
+         if(g_sym_wait == 0) g_sym_wait = NowMs();
+         Comment("GoldCopierSlave: waiting for symbol ", TargetSymbol, " (terminal still synchronising?)");
+         if(g_sym_wait > 1 && NowMs() - g_sym_wait > 120000)
+           { Print("GoldCopierSlave: symbol ", TargetSymbol, " not found on this account"); g_sym_wait = 1; }
+         return;
+        }
+     }
    if(!HoldLock())
      {
       Comment("GoldCopierSlave: standby (another chart is already copying for this account)");

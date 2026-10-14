@@ -13,6 +13,8 @@ input int    PublishMs    = 100;                // Publish interval in milliseco
 
 string g_tmp, g_file, g_lock_name, g_hb_name;
 bool   g_have_lock = false;
+bool   g_sym_ok = false;
+ulong  g_sym_wait = 0;
 ulong  g_wait_since = 0, g_last_hb = 0;
 int    g_last_count = -1;
 long   g_last_conn  = -1;
@@ -20,11 +22,7 @@ long   g_last_conn  = -1;
 int OnInit()
   {
    g_file = FeedName + ".txt";
-   if(!SymbolSelect(SourceSymbol, true))
-     {
-      Alert("GoldCopierMaster: symbol ", SourceSymbol, " not found on this account");
-      return(INIT_FAILED);
-     }
+   g_sym_ok = SymbolSelect(SourceSymbol, true);   // may time out right after start-up; retried in OnTimer
    g_lock_name = "GC_MASTER_LOCK";
    g_hb_name   = "GC_MASTER_HB";
    g_tmp  = FeedName + ".tmp";
@@ -72,7 +70,22 @@ bool HoldLock()
    return(false);
   }
 
-void OnTimer() { if(HoldLock()) Publish(); }
+void OnTimer()
+  {
+   if(!g_sym_ok)
+     {
+      g_sym_ok = SymbolSelect(SourceSymbol, true);
+      if(!g_sym_ok)
+        {
+         if(g_sym_wait == 0) g_sym_wait = GetMicrosecondCount() / 1000;
+         Comment("GoldCopierMaster: waiting for symbol ", SourceSymbol, " (terminal still synchronising?)");
+         if(g_sym_wait > 1 && GetMicrosecondCount() / 1000 - g_sym_wait > 120000)
+           { Print("GoldCopierMaster: symbol ", SourceSymbol, " not found on this account"); g_sym_wait = 1; }
+         return;
+        }
+     }
+   if(HoldLock()) Publish();
+  }
 
 void OnTradeTransaction(const MqlTradeTransaction &trans, const MqlTradeRequest &request, const MqlTradeResult &result)
   {
