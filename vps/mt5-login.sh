@@ -42,7 +42,8 @@ read -r  -p "Server name (exactly as your phone shows it): " SERVER </dev/tty
 read -rs -p "Password (paste with Cmd+V - nothing will show), then Enter: " PASS </dev/tty; echo
 [ -n "$LOGIN" ] && [ -n "$SERVER" ] && [ -n "$PASS" ] || { echo "Something was empty - nothing changed."; exit 1; }
 
-INI="$PF/$D/gc-login.ini"
+# Path must have no spaces: MT5 mis-parses a quoted /config:"...Program Files..." argument.
+INI="$H/.mt5/drive_c/gc-login.ini"
 umask 077
 printf '[Common]\r\nLogin=%s\r\nPassword=%s\r\nServer=%s\r\nKeepPrivate=1\r\n' \
   "$LOGIN" "$PASS" "$SERVER" > "$INI"
@@ -63,7 +64,7 @@ pkill -u trader -f "$D.terminal64" 2>/dev/null || true
 for i in $(seq 1 15); do pgrep -u trader -f "$D.terminal64" >/dev/null || break; sleep 1; done
 
 sudo -u trader env DISPLAY=:1 WINEPREFIX="$H/.mt5" WINEDEBUG=-all \
-  bash -c "cd \"$PF/$D\" && nohup wine terminal64.exe /portable '/config:C:\\Program Files\\$D\\gc-login.ini' >/dev/null 2>&1 &"
+  bash -c "cd \"$PF/$D\" && nohup wine terminal64.exe /portable /config:C:\\gc-login.ini >/dev/null 2>&1 &"
 
 echo "Waiting 60 seconds for it to connect..."
 sleep 60
