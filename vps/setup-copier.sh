@@ -13,7 +13,7 @@
 set -euo pipefail
 [ "$(id -u)" = 0 ] || { echo "Run as root"; exit 1; }
 
-RAW="https://raw.githubusercontent.com/Boymyke/copy-trading-bot/main/vps"
+RAW="https://raw.githubusercontent.com/Boymyke/copy-trading-bot/${GC_REF:-main}/vps"   # GC_REF pins a commit (avoids GitHub cache)
 U=trader
 H=/home/$U
 PFX=$H/.mt5
@@ -85,6 +85,7 @@ rm -rf "$TMPD"
 
 # ---------------------------------------------------------------- 3
 say "3/5 Telegram alerts and /lot commands"
+systemctl stop gold-copier-telegram.service 2>/dev/null || true   # so it cannot swallow your "hi"
 COMMON=$(find "$C/users" -type d -path '*MetaQuotes/Terminal/Common' 2>/dev/null | head -1 || true)
 [ -n "$COMMON" ] || COMMON="$C/users/$U/AppData/Roaming/MetaQuotes/Terminal/Common"
 mkdir -p "$COMMON/Files"; chown -R "$U:$U" "$C/users/$U/AppData/Roaming/MetaQuotes" 2>/dev/null || true
@@ -144,6 +145,31 @@ else
   echo "   Telegram skipped - the copier still works, just without messages."
 fi
 unset TOKEN T
+
+# Telegram helper: MT5's WebRequest allow-list does not stick under Wine, so a small
+# service sends the EA's messages and collects your /lot commands.
+curl -fsSL -H 'Cache-Control: no-cache' -o /usr/local/bin/gc-telegram.py "$RAW/gc-telegram.py?v=$(date +%s)"
+chmod 755 /usr/local/bin/gc-telegram.py
+cat > /etc/systemd/system/gold-copier-telegram.service <<EOS
+[Unit]
+Description=Gold Copier Telegram helper
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=$U
+ExecStart=/usr/bin/python3 /usr/local/bin/gc-telegram.py "$COMMON/Files"
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOS
+systemctl daemon-reload
+systemctl enable gold-copier-telegram.service >/dev/null 2>&1
+systemctl restart gold-copier-telegram.service
+sleep 2
+systemctl is-active --quiet gold-copier-telegram.service && ok "Telegram helper running" || bad "Telegram helper failed: journalctl -u gold-copier-telegram"
 
 # ---------------------------------------------------------------- 4
 say "4/5 Start-up settings: Algo Trading ON, Telegram allowed, EA on the gold chart"
@@ -228,10 +254,6 @@ else
   bad "Slave EA has not reported 'started' yet. Its latest log lines:"
 fi
 echo "$SL" | sed 's/^/      /'
-if u16 < "$LOGF" 2>/dev/null | grep -q 'Telegram blocked'; then
-  bad "MT5 is blocking Telegram: in the Exness terminal open Tools > Options > Expert Advisors,"
-  bad "tick 'Allow WebRequest for listed URL' and add https://api.telegram.org"
-fi
 [ "$COMPILED" = 1 ] || bad "Compile the EAs in MetaEditor (open it, select each GoldCopier file, press F7), then re-run this script."
 echo
 echo "Next: open a small XAUUSD.f trade on TMFinancials - it should appear on Exness within ~1 second."

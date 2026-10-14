@@ -488,52 +488,24 @@ void SaveSettings()
 //+------------------------------------------------------------------+
 //| Telegram commands - read once a day, never polled continuously.  |
 //+------------------------------------------------------------------+
+// Lot commands (/lot, /per) are collected from Telegram by the VPS helper into a file;
+// they are applied here only at start-up and at the morning check.
 void PollTelegram()
   {
-   if(g_tg_token == "" || g_tg_chat == "") return;
-   string url = "https://api.telegram.org/bot" + g_tg_token + "/getUpdates?timeout=0&allowed_updates=%5B%22message%22%5D";
-   if(g_tg_offset > 0) url += "&offset=" + IntegerToString(g_tg_offset);
-   char data[], result[];
-   string resp_headers;
-   ResetLastError();
-   int code = WebRequest("GET", url, "", 10000, data, result, resp_headers);
-   if(code != 200)
-     {
-      Print("GoldCopierSlave: Telegram getUpdates failed, HTTP ", code, " err ", GetLastError(), " ",
-            CharArrayToString(result, 0, WHOLE_ARRAY, CP_UTF8));
-      if(code == 409)
-         Notify("⚠️ Could not read your Telegram commands: another program is reading this bot's messages "
-                "(the old Railway bot?). Stop it, or /lot commands will be missed.");
-      return;
-     }
-   string json = CharArrayToString(result, 0, WHOLE_ARRAY, CP_UTF8);
-   string key = "\"update_id\":";
-   int pos = StringFind(json, key);
-   long max_id = -1;
+   string f = "gold_copier_inbox.txt";
+   if(!FileIsExist(f, FILE_COMMON)) return;
+   int h = FileOpen(f, FILE_READ | FILE_TXT | FILE_ANSI | FILE_COMMON | FILE_SHARE_READ | FILE_SHARE_WRITE);
+   if(h == INVALID_HANDLE) return;
    string changes = "";
-   while(pos >= 0)
+   while(!FileIsEnding(h))
      {
-      int next = StringFind(json, key, pos + 1);
-      string seg = (next < 0 ? StringSubstr(json, pos) : StringSubstr(json, pos, next - pos));
-      long uid = StringToInteger(StringSubstr(seg, StringLen(key)));
-      if(uid > max_id) max_id = uid;
-      string chat = JsonNumberAfter(seg, "\"chat\":{\"id\":");
-      string text = JsonStringAfter(seg, "\"text\":\"");
-      if(chat == g_tg_chat && text != "")
-        {
-         string r = ApplyCommand(text);
-         if(r != "") changes += r + "\n";
-        }
-      pos = next;
+      string line = FileReadString(h);
+      if(line == "") continue;
+      string r = ApplyCommand(line);
+      if(r != "") changes += r + "\n";
      }
-   if(max_id >= 0)
-     {
-      g_tg_offset = max_id + 1;
-      // acknowledge so the same messages are not read again
-      char ack[];
-      WebRequest("GET", "https://api.telegram.org/bot" + g_tg_token + "/getUpdates?timeout=0&limit=1&offset=" +
-                 IntegerToString(g_tg_offset), "", 5000, data, ack, resp_headers);
-     }
+   FileClose(h);
+   FileDelete(f, FILE_COMMON);
    SaveSettings();
    if(changes != "") Notify("⚙️ Lot settings updated from Telegram:\n" + changes);
   }
@@ -770,7 +742,7 @@ void UpdateComment(bool connected)
    Comment("GoldCopierSlave  |  ", TargetSymbol, " ", LotText(), "\n",
            "Source feed: ", (g_feed_ok ? "OK" : "DOWN"), " (", ArraySize(s_ticket), " open)  |  Exness connected: ",
            (connected ? "yes" : "NO"), "\nCopied trades open: ", ArraySize(map_src),
-           "  |  Telegram: ", (g_tg_token == "" ? "off" : "on"));
+           "  |  Telegram: via VPS helper");
   }
 
 //+------------------------------------------------------------------+
@@ -779,36 +751,32 @@ void UpdateComment(bool connected)
 void Notify(string text)
   {
    Print("GoldCopierSlave: ", text);
-   if(g_tg_token == "" || g_tg_chat == "") return;
    int k = ArraySize(tg_queue);
    if(k > 50) return;
    ArrayResize(tg_queue, k + 1);
    tg_queue[k] = text;
   }
 
+// Messages go to a file; the VPS helper (gc-telegram.py) sends them to Telegram.
+// (MT5's WebRequest allow-list does not survive restarts reliably under Wine.)
 void FlushTelegram()
   {
    if(ArraySize(tg_queue) == 0) return;
-   string text = tg_queue[0];
-   for(int i = 0; i < ArraySize(tg_queue) - 1; i++) tg_queue[i] = tg_queue[i + 1];
-   ArrayResize(tg_queue, ArraySize(tg_queue) - 1);
-
-   string body = "chat_id=" + UrlEncode(g_tg_chat) + "&text=" + UrlEncode(text);
-   char data[], result[];
-   int n = StringToCharArray(body, data, 0, WHOLE_ARRAY, CP_UTF8);
-   if(n > 0) ArrayResize(data, n - 1);   // drop trailing zero
-   string headers = "Content-Type: application/x-www-form-urlencoded\r\n", resp_headers;
-   ResetLastError();
-   int code = WebRequest("POST", "https://api.telegram.org/bot" + g_tg_token + "/sendMessage",
-                         headers, 5000, data, result, resp_headers);
-   if(code == -1 && !g_url_warned)
+   int h = FileOpen("gold_copier_outbox.txt", FILE_READ | FILE_WRITE | FILE_BIN | FILE_COMMON | FILE_SHARE_READ);
+   if(h == INVALID_HANDLE) return;               // retry next tick
+   FileSeek(h, 0, SEEK_END);
+   for(int i = 0; i < ArraySize(tg_queue); i++)
      {
-      g_url_warned = true;
-      Alert("GoldCopierSlave: Telegram blocked (error ", GetLastError(),
-            "). Tools > Options > Expert Advisors > tick 'Allow WebRequest' and add https://api.telegram.org");
+      string t = tg_queue[i];
+      StringReplace(t, "\\", "\\\\");
+      StringReplace(t, "\r", "");
+      StringReplace(t, "\n", "\\n");
+      uchar b[];
+      int n = StringToCharArray(t + "\n", b, 0, WHOLE_ARRAY, CP_UTF8);
+      if(n > 1) FileWriteArray(h, b, 0, n - 1);
      }
-   else if(code != 200 && code != -1)
-      Print("GoldCopierSlave: Telegram HTTP ", code, " ", CharArrayToString(result, 0, WHOLE_ARRAY, CP_UTF8));
+   FileClose(h);
+   ArrayResize(tg_queue, 0);
   }
 
 string UrlEncode(string s)
