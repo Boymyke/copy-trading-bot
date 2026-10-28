@@ -75,9 +75,8 @@ def send_outbox(tok, chat):
     os.remove(SENDING)
 
 
-HELP = ("Gold copier commands (applied at the 8:00 am Lagos morning check, or when the copier restarts):\n"
-        "/lot 0.02 - fixed lot\n/lot auto - lot grows with the Exness balance\n"
-        "/per 50 - in auto mode, 0.01 lot per 50 USD of balance")
+HELP = ("This chat receives the trading robot's updates: every trade opened and closed with its profit or loss, "
+        "plus a daily summary. No commands are needed.")
 
 
 def poll_commands(tok, chat):
