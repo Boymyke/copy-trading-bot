@@ -1,6 +1,8 @@
 //+------------------------------------------------------------------+
 //| GrowthBot.mq5                                                    |
-//| Rules-based trend-pullback scalper for small accounts.           |
+//| Rules-based multi-strategy robot (StrategyId selects one):       |
+//|  1 trend pullback   2 channel breakout   3 range mean reversion  |
+//|  4 EMA cross + ADX  5 London breakout of the Asian range         |
 //|                                                                  |
 //|  Trend   : EMA50 vs EMA200 on H1, price on the trend side         |
 //|  Entry   : M5 pullback that touched EMA20 in the last 3 bars,     |
@@ -16,18 +18,31 @@
 //|            through the VPS helper (gold_copier_outbox.txt).       |
 //+------------------------------------------------------------------+
 #property copyright "GrowthBot"
-#property version   "1.00"
+#property version   "2.00"
 
 #include <Trade\Trade.mqh>
 
 input string          InpSymbols          = "EURUSD,GBPUSD,USDJPY,XAUUSD"; // Base names; broker suffix is found automatically
 input ENUM_TIMEFRAMES EntryTF             = PERIOD_M5;
 input ENUM_TIMEFRAMES TrendTF             = PERIOD_H1;
+input int             StrategyId          = 1;      // 1 pullback, 2 breakout, 3 mean reversion, 4 EMA cross, 5 London breakout
 input int             EmaPullback         = 20;
 input int             EmaTrendFast        = 50;
 input int             EmaTrendSlow        = 200;
 input int             RsiPeriod           = 14;
 input int             AtrPeriod           = 14;
+input int             BreakoutBars        = 20;     // 2: channel length
+input int             BBPeriod            = 20;     // 3: Bollinger period
+input double          BBDev               = 2.0;    // 3: Bollinger width
+input int             AdxPeriod           = 14;
+input double          AdxTrendMin         = 25;     // 4: minimum ADX for a cross
+input double          AdxRangeMax         = 20;     // 3: maximum ADX for mean reversion
+input int             CrossFast           = 20;     // 4
+input int             CrossSlow           = 50;     // 4
+input int             RangeStartGMT       = 0;      // 5: Asian range from (server time)
+input int             RangeEndGMT         = 7;      // 5: Asian range until / breakouts from
+input int             BreakoutEndGMT      = 11;     // 5: no new breakouts after
+input double          MaxRangeAtr         = 10.0;   // 5: skip if the Asian range is wider than this x ATR
 input double          SlAtrMult           = 1.5;    // stop distance = this x ATR
 input double          TpR                 = 2.0;    // target = this x stop distance
 input double          BreakevenR          = 1.0;    // move stop to entry after this many R
@@ -46,7 +61,8 @@ input bool            TradingEnabled      = true;
 
 CTrade   trade;
 string   sym[];
-int      hTF[], hTS[], hE[], hR[], hA[];
+int      hTF[], hTS[], hE[], hR[], hA[], hB[], hX[], hCF[], hCS[];
+int      tradedDay[];
 datetime lastBar[];
 int      skipDay[];
 
@@ -83,12 +99,19 @@ int OnInit()
       int c = iMA(s, EntryTF, EmaPullback, 0, MODE_EMA, PRICE_CLOSE);
       int d = iRSI(s, EntryTF, RsiPeriod, PRICE_CLOSE);
       int e = iATR(s, EntryTF, AtrPeriod);
-      if(a == INVALID_HANDLE || b == INVALID_HANDLE || c == INVALID_HANDLE || d == INVALID_HANDLE || e == INVALID_HANDLE)
+      int f = iBands(s, EntryTF, BBPeriod, 0, BBDev, PRICE_CLOSE);
+      int g = iADX(s, EntryTF, AdxPeriod);
+      int h1 = iMA(s, EntryTF, CrossFast, 0, MODE_EMA, PRICE_CLOSE);
+      int h2 = iMA(s, EntryTF, CrossSlow, 0, MODE_EMA, PRICE_CLOSE);
+      if(a == INVALID_HANDLE || b == INVALID_HANDLE || c == INVALID_HANDLE || d == INVALID_HANDLE || e == INVALID_HANDLE ||
+         f == INVALID_HANDLE || g == INVALID_HANDLE || h1 == INVALID_HANDLE || h2 == INVALID_HANDLE)
         { Print("GrowthBot: indicators failed for ", s); continue; }
       int k = ArraySize(sym);
       ArrayResize(sym, k + 1); ArrayResize(hTF, k + 1); ArrayResize(hTS, k + 1); ArrayResize(hE, k + 1);
       ArrayResize(hR, k + 1); ArrayResize(hA, k + 1); ArrayResize(lastBar, k + 1); ArrayResize(skipDay, k + 1);
+      ArrayResize(hB, k + 1); ArrayResize(hX, k + 1); ArrayResize(hCF, k + 1); ArrayResize(hCS, k + 1); ArrayResize(tradedDay, k + 1);
       sym[k] = s; hTF[k] = a; hTS[k] = b; hE[k] = c; hR[k] = d; hA[k] = e; lastBar[k] = 0; skipDay[k] = -1;
+      hB[k] = f; hX[k] = g; hCF[k] = h1; hCS[k] = h2; tradedDay[k] = -1;
      }
    if(ArraySize(sym) == 0) { Print("GrowthBot: no tradable symbols"); return(INIT_FAILED); }
    trade.SetExpertMagicNumber((ulong)Magic);
@@ -131,7 +154,7 @@ void Process()
       g_started = true;
       string list = "";
       for(int i = 0; i < ArraySize(sym); i++) list += (i ? ", " : "") + sym[i];
-      Notify("🤖 GrowthBot started on #" + IntegerToString(AccountInfoInteger(ACCOUNT_LOGIN)) +
+      Notify("🤖 GrowthBot started (" + StrategyName() + ") on #" + IntegerToString(AccountInfoInteger(ACCOUNT_LOGIN)) +
              "\nBalance $" + DoubleToString(AccountInfoDouble(ACCOUNT_BALANCE), 2) + " · goal $" + DoubleToString(GoalBalance, 0) +
              "\nMarkets: " + list +
              "\nRisk " + DoubleToString(RiskPercent, 1) + "% per trade, max " + IntegerToString(MaxTradesPerDay) +
@@ -153,53 +176,154 @@ void Process()
 //+------------------------------------------------------------------+
 //| Signal                                                           |
 //+------------------------------------------------------------------+
+string StrategyName()
+  {
+   switch(StrategyId)
+     {
+      case 2: return("channel breakout");
+      case 3: return("range mean reversion");
+      case 4: return("EMA cross + ADX");
+      case 5: return("London breakout");
+     }
+   return("trend pullback");
+  }
+
 void Evaluate(int i)
   {
-   if(!TradingEnabled || !CanOpenNew() || !InSession()) return;
+   if(!TradingEnabled || !CanOpenNew()) return;
    string s = sym[i];
    if(HasPosition(s) || CountPositions() >= MaxOpenPositions) return;
+   double a[];
+   ArraySetAsSeries(a, true);
+   if(CopyBuffer(hA[i], 0, 1, 1, a) < 1 || a[0] <= 0) return;
+   if(StrategyId == 5) { EvalRange(i, a[0]); return; }
+   if(!InSession()) return;
+   int sig = 0;
+   if(StrategyId == 2)      sig = SigBreakout(i);
+   else if(StrategyId == 3) sig = SigMeanRev(i);
+   else if(StrategyId == 4) sig = SigCross(i);
+   else                     sig = SigPullback(i);
+   if(sig != 0) Open(i, sig > 0, SlAtrMult * a[0]);
+  }
 
-   double tf[], ts[], e[], r[], a[];
+int TrendDir(int i)
+  {
+   double tf[], ts[];
+   ArraySetAsSeries(tf, true); ArraySetAsSeries(ts, true);
+   if(CopyBuffer(hTF[i], 0, 1, 1, tf) < 1 || CopyBuffer(hTS[i], 0, 1, 1, ts) < 1) return(0);
+   double hc = iClose(sym[i], TrendTF, 1);
+   if(hc <= 0) return(0);
+   if(tf[0] > ts[0] && hc > tf[0]) return(1);
+   if(tf[0] < ts[0] && hc < tf[0]) return(-1);
+   return(0);
+  }
+
+// 1: pullback to EMA20 in the higher-timeframe trend, RSI confirming
+int SigPullback(int i)
+  {
+   int dir = TrendDir(i);
+   if(dir == 0) return(0);
+   double e[], r[];
    MqlRates rt[];
-   ArraySetAsSeries(tf, true); ArraySetAsSeries(ts, true); ArraySetAsSeries(e, true);
-   ArraySetAsSeries(r, true);  ArraySetAsSeries(a, true);  ArraySetAsSeries(rt, true);
-   if(CopyBuffer(hTF[i], 0, 1, 1, tf) < 1 || CopyBuffer(hTS[i], 0, 1, 1, ts) < 1) return;
-   if(CopyBuffer(hE[i], 0, 1, 3, e) < 3 || CopyBuffer(hR[i], 0, 1, 2, r) < 2 || CopyBuffer(hA[i], 0, 1, 1, a) < 1) return;
-   if(CopyRates(s, EntryTF, 1, 3, rt) < 3) return;
-   double hc = iClose(s, TrendTF, 1);
-   if(hc <= 0 || a[0] <= 0) return;
-
-   bool up = (tf[0] > ts[0] && hc > tf[0]);
-   bool dn = (tf[0] < ts[0] && hc < tf[0]);
-   if(!up && !dn) return;
-
+   ArraySetAsSeries(e, true); ArraySetAsSeries(r, true); ArraySetAsSeries(rt, true);
+   if(CopyBuffer(hE[i], 0, 1, 3, e) < 3 || CopyBuffer(hR[i], 0, 1, 2, r) < 2) return(0);
+   if(CopyRates(sym[i], EntryTF, 1, 3, rt) < 3) return(0);
    bool touchUp = false, touchDn = false;
    for(int k = 0; k < 3; k++)
      {
       if(rt[k].low  <= e[k]) touchUp = true;
       if(rt[k].high >= e[k]) touchDn = true;
      }
-   bool buy  = up && touchUp && rt[0].close > e[0] && rt[0].close > rt[0].open && r[0] > 50 && r[0] < 70 && r[0] >= r[1];
-   bool sell = dn && touchDn && rt[0].close < e[0] && rt[0].close < rt[0].open && r[0] < 50 && r[0] > 30 && r[0] <= r[1];
-   if(buy || sell) Open(i, buy, a[0]);
+   if(dir > 0 && touchUp && rt[0].close > e[0] && rt[0].close > rt[0].open && r[0] > 50 && r[0] < 70 && r[0] >= r[1]) return(1);
+   if(dir < 0 && touchDn && rt[0].close < e[0] && rt[0].close < rt[0].open && r[0] < 50 && r[0] > 30 && r[0] <= r[1]) return(-1);
+   return(0);
   }
 
-void Open(int i, bool buy, double atr)
+// 2: close beyond the last BreakoutBars-bar high/low, in the higher-timeframe trend
+int SigBreakout(int i)
+  {
+   int dir = TrendDir(i);
+   if(dir == 0) return(0);
+   MqlRates rt[];
+   ArraySetAsSeries(rt, true);
+   if(CopyRates(sym[i], EntryTF, 1, BreakoutBars + 1, rt) < BreakoutBars + 1) return(0);
+   double hh = -DBL_MAX, ll = DBL_MAX;
+   for(int k = 1; k <= BreakoutBars; k++) { hh = MathMax(hh, rt[k].high); ll = MathMin(ll, rt[k].low); }
+   if(dir > 0 && rt[0].close > hh) return(1);
+   if(dir < 0 && rt[0].close < ll) return(-1);
+   return(0);
+  }
+
+// 3: in a quiet market (low ADX), fade a close outside the Bollinger band with RSI stretched
+int SigMeanRev(int i)
+  {
+   double up[], lo[], r[], adx[];
+   ArraySetAsSeries(up, true); ArraySetAsSeries(lo, true); ArraySetAsSeries(r, true); ArraySetAsSeries(adx, true);
+   if(CopyBuffer(hB[i], 1, 1, 1, up) < 1 || CopyBuffer(hB[i], 2, 1, 1, lo) < 1) return(0);
+   if(CopyBuffer(hR[i], 0, 1, 1, r) < 1 || CopyBuffer(hX[i], 0, 1, 1, adx) < 1) return(0);
+   if(adx[0] > AdxRangeMax) return(0);
+   double c1 = iClose(sym[i], EntryTF, 1);
+   if(c1 <= 0) return(0);
+   if(c1 < lo[0] && r[0] < 30) return(1);
+   if(c1 > up[0] && r[0] > 70) return(-1);
+   return(0);
+  }
+
+// 4: fast/slow EMA cross with a strong ADX trend, not against the higher timeframe
+int SigCross(int i)
+  {
+   double f[], sl[], adx[], pdi[], mdi[];
+   ArraySetAsSeries(f, true); ArraySetAsSeries(sl, true); ArraySetAsSeries(adx, true);
+   ArraySetAsSeries(pdi, true); ArraySetAsSeries(mdi, true);
+   if(CopyBuffer(hCF[i], 0, 1, 2, f) < 2 || CopyBuffer(hCS[i], 0, 1, 2, sl) < 2) return(0);
+   if(CopyBuffer(hX[i], 0, 1, 1, adx) < 1 || CopyBuffer(hX[i], 1, 1, 1, pdi) < 1 || CopyBuffer(hX[i], 2, 1, 1, mdi) < 1) return(0);
+   if(adx[0] < AdxTrendMin) return(0);
+   int dir = TrendDir(i);
+   if(f[0] > sl[0] && f[1] <= sl[1] && pdi[0] > mdi[0] && dir >= 0) return(1);
+   if(f[0] < sl[0] && f[1] >= sl[1] && mdi[0] > pdi[0] && dir <= 0) return(-1);
+   return(0);
+  }
+
+// 5: once a day, trade the first close outside the Asian-session range; stop at the other side
+void EvalRange(int i, double atr)
+  {
+   string s = sym[i];
+   datetime now = TimeCurrent();
+   MqlDateTime t;
+   TimeToStruct(now, t);
+   if(t.day_of_week == 0 || t.day_of_week == 6) return;
+   if(t.hour < RangeEndGMT || t.hour >= BreakoutEndGMT) return;
+   if(tradedDay[i] == g_day) return;
+   datetime day0 = now - (t.hour * 3600 + t.min * 60 + t.sec);
+   MqlRates rr[];
+   int n = CopyRates(s, EntryTF, day0 + RangeStartGMT * 3600, day0 + RangeEndGMT * 3600 - 1, rr);
+   if(n < 4) return;
+   double hi = -DBL_MAX, lo = DBL_MAX;
+   for(int k = 0; k < n; k++) { hi = MathMax(hi, rr[k].high); lo = MathMin(lo, rr[k].low); }
+   double range = hi - lo;
+   if(range <= 0 || range > MaxRangeAtr * atr) return;
+   double c1 = iClose(s, EntryTF, 1);
+   MqlTick tk;
+   if(c1 <= 0 || !SymbolInfoTick(s, tk)) return;
+   if(c1 > hi && tk.ask > lo)      { if(Open(i, true,  tk.ask - lo)) tradedDay[i] = g_day; }
+   else if(c1 < lo && tk.bid < hi) { if(Open(i, false, hi - tk.bid)) tradedDay[i] = g_day; }
+  }
+
+bool Open(int i, bool buy, double sld)
   {
    string s = sym[i];
    MqlTick tk;
-   if(!SymbolInfoTick(s, tk) || tk.ask <= 0 || tk.bid <= 0) return;
+   if(!SymbolInfoTick(s, tk) || tk.ask <= 0 || tk.bid <= 0) return(false);
    double pt = SymbolInfoDouble(s, SYMBOL_POINT);
    int    dg = (int)SymbolInfoInteger(s, SYMBOL_DIGITS);
    double spread = tk.ask - tk.bid;
-   double sld = SlAtrMult * atr;
    double minStop = (double)SymbolInfoInteger(s, SYMBOL_TRADE_STOPS_LEVEL) * pt + spread;
    if(sld < minStop) sld = minStop;
-   if(spread > MaxSpreadFracOfSL * sld) return;
+   if(spread > MaxSpreadFracOfSL * sld) return(false);
 
    double risk = 0; string why = "";
    double lots = LotsFor(s, sld, risk, why);
-   if(lots <= 0) { NoteSkip(i, why); return; }
+   if(lots <= 0) { NoteSkip(i, why); return(false); }
 
    double price = buy ? tk.ask : tk.bid;
    double sl = NormalizeDouble(buy ? price - sld : price + sld, dg);
@@ -207,7 +331,7 @@ void Open(int i, bool buy, double atr)
    double margin = 0;
    if(!OrderCalcMargin(buy ? ORDER_TYPE_BUY : ORDER_TYPE_SELL, s, lots, price, margin) ||
       margin > AccountInfoDouble(ACCOUNT_MARGIN_FREE) * 0.8)
-     { NoteSkip(i, "not enough free margin"); return; }
+     { NoteSkip(i, "not enough free margin"); return(false); }
 
    trade.SetTypeFillingBySymbol(s);
    bool ok = buy ? trade.Buy(lots, s, price, sl, tp, "GrowthBot") : trade.Sell(lots, s, price, sl, tp, "GrowthBot");
@@ -216,10 +340,11 @@ void Open(int i, bool buy, double atr)
      {
       g_dayTrades++;
       SaveDay();
+      return(true);
      }
-   else
-      Notify("🔴 Could not open " + (buy ? "BUY " : "SELL ") + s + " " + DoubleToString(lots, 2) +
-             ": " + IntegerToString(rc) + " " + trade.ResultRetcodeDescription());
+   Notify("🔴 Could not open " + (buy ? "BUY " : "SELL ") + s + " " + DoubleToString(lots, 2) +
+          ": " + IntegerToString(rc) + " " + trade.ResultRetcodeDescription());
+   return(false);
   }
 
 double LotsFor(string s, double sld, double &risk, string &why)
