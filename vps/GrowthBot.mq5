@@ -18,7 +18,7 @@
 //|            through the VPS helper (gold_copier_outbox.txt).       |
 //+------------------------------------------------------------------+
 #property copyright "GrowthBot"
-#property version   "2.00"
+#property version   "2.10"
 
 #include <Trade\Trade.mqh>
 
@@ -56,6 +56,7 @@ input int             MaxOpenPositions    = 2;
 input double          DailyLossLimitPct   = 15.0;   // no new trades for the day after this % equity drop
 input double          StopBelowEquity     = 0;      // hard floor: no new trades below this equity (0 = off)
 input double          GoalBalance         = 1000;
+input bool            StopAtGoal          = true;   // stop opening trades once the balance reaches the goal
 input long            Magic               = 26102801;
 input bool            TradingEnabled      = true;
 
@@ -294,9 +295,11 @@ void EvalRange(int i, double atr)
    if(t.day_of_week == 0 || t.day_of_week == 6) return;
    if(t.hour < RangeEndGMT || t.hour >= BreakoutEndGMT) return;
    if(tradedDay[i] == g_day) return;
-   datetime day0 = now - (t.hour * 3600 + t.min * 60 + t.sec);
+   datetime day0 = (datetime)((long)now - (t.hour * 3600 + t.min * 60 + t.sec));
    MqlRates rr[];
-   int n = CopyRates(s, EntryTF, day0 + RangeStartGMT * 3600, day0 + RangeEndGMT * 3600 - 1, rr);
+   datetime r0 = (datetime)((long)day0 + RangeStartGMT * 3600);
+   datetime r1 = (datetime)((long)day0 + RangeEndGMT * 3600 - 1);
+   int n = CopyRates(s, EntryTF, r0, r1, rr);
    if(n < 4) return;
    double hi = -DBL_MAX, lo = DBL_MAX;
    for(int k = 0; k < n; k++) { hi = MathMax(hi, rr[k].high); lo = MathMin(lo, rr[k].low); }
@@ -439,6 +442,7 @@ bool InSession()
 bool CanOpenNew()
   {
    if(g_dayTrades >= MaxTradesPerDay) return(false);
+   if(StopAtGoal && GoalBalance > 0 && AccountInfoDouble(ACCOUNT_BALANCE) >= GoalBalance) return(false);
    double eq = AccountInfoDouble(ACCOUNT_EQUITY);
    if(DailyLossLimitPct > 0 && g_dayEq > 0 && eq <= g_dayEq * (1.0 - DailyLossLimitPct / 100.0))
      {
