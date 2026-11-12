@@ -25,7 +25,7 @@ if [ -z "${SL_CHILD:-}" ]; then
   SELF=/root/flip-setup.sh
   curl -fsSL -H 'Cache-Control: no-cache' -o "$SELF" "$RAW/flip-setup.sh"
   : > "$LOG"
-  SL_CHILD=1 GC_REF="$REF" GB_LIVE="${GB_LIVE:-}" setsid bash "$SELF" >>"$LOG" 2>&1 </dev/null &
+  SL_CHILD=1 GC_REF="$REF" GB_LIVE="${GB_LIVE:-}" GB_GOAL="${GB_GOAL:-1000}" setsid bash "$SELF" >>"$LOG" 2>&1 </dev/null &
   echo
   echo "FlipBot setup is running in the background (about 1-2 hours: 36 short backtests)."
   echo "You can close this window. Progress and results arrive in Telegram."
@@ -93,7 +93,7 @@ for link in gc_tester gc_slave; do
 done
 
 say "3/4 Replaying the last 12 months from \$12"
-export TD C EX TGF PFX GB_LIVE="${GB_LIVE:-}"
+export TD C EX TGF PFX GB_LIVE="${GB_LIVE:-}" GB_GOAL="${GB_GOAL:-1000}"
 python3 - <<'PY'
 import os, re, glob, shutil, subprocess, time, datetime, urllib.request, urllib.parse
 
@@ -160,8 +160,9 @@ def run(name, params, main, period, deposit=1000):
 
 
 import calendar, statistics
+GOAL = int(float(os.environ.get("GB_GOAL") or 1000))
 FLIP = dict(RiskPercent=35.0, MaxRiskPercent=60.0, BreakevenR=99, DailyLossLimitPct=0, MaxTradesPerDay=4,
-            MaxOpenPositions=1, SessionStartGMT=6, SessionEndGMT=20, GoalBalance=1000, StopAtGoal="true",
+            MaxOpenPositions=1, SessionStartGMT=6, SessionEndGMT=20, GoalBalance=GOAL, StopAtGoal="true",
             InpSymbols="EURUSD,GBPUSD,USDJPY,AUDUSD,USDCAD,XAUUSD")
 CONFIGS = [
     ("Breakout flip (1-hour chart, target 3x the risk)",  dict(StrategyId=2, EntryTF=16385, TrendTF=16388, SlAtrMult=2.0, TpR=3.0)),
@@ -193,7 +194,7 @@ for ci, (label, cp) in enumerate(CONFIGS):
         print(f"   {label} {yy}-{mm:02d}: ended ${fin:.2f} after {r['trades']} trades", flush=True)
         if n % 12 == 0 and n < 36: tg(f"🎲 FlipBot: {n}/36 monthly replays done...")
     if finals:
-        summary.append(dict(label=label, params=p, finals=finals, hit=sum(f >= 1000 for f in finals),
+        summary.append(dict(label=label, params=p, finals=finals, hit=sum(f >= GOAL for f in finals),
                             h100=sum(f >= 100 for f in finals), h50=sum(f >= 50 for f in finals),
                             up=sum(f > 12 for f in finals), low=sum(f < 6 for f in finals),
                             med=statistics.median(finals), best=max(finals)))
@@ -203,7 +204,7 @@ if not summary:
 lines = []
 for r in summary:
     k = len(r["finals"])
-    lines.append(f"• {r['label']}\n   reached $1,000: {r['hit']} of {k} months · ended above $100: {r['h100']} · above $50: {r['h50']} · "
+    lines.append(f"• {r['label']}\n   reached ${GOAL}: {r['hit']} of {k} months · ended above $100: {r['h100']} · above $50: {r['h50']} · "
                  f"in profit: {r['up']} · ended under $6: {r['low']}\n   typical month ended at ${r['med']:.2f}, best month ${r['best']:.2f}")
 best = max(summary, key=lambda r: (r["hit"], r["h100"], r["h50"], r["med"]))
 live = os.environ.get("GB_LIVE") == "1"
@@ -214,7 +215,7 @@ msg = ("🎲 FlipBot results - each setting started with $12 on the 1st of each 
        f"\n\nInstalled: {best['label']}.\n" +
        ("✅ It is LIVE on your Exness account now. " if live else "⏸ It is in STAND-BY (not trading). Switch it on with growthbot-switch.sh. ") +
        "It risks about a third of the account on each trade, so most runs end with a few dollars left; "
-       "it stops by itself at $1,000 or when the account is too small to trade.")
+       f"it stops by itself at ${GOAL} or when the account is too small to trade.")
 print(msg, flush=True)
 tg(msg)
 PY
