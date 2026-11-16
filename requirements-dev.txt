@@ -1,3 +1,5 @@
 pytest
 pytest-asyncio
 pytest-aiohttp
+# only for the retired CopyFactory monitor in app/ and its tests
+metaapi-cloud-copyfactory-sdk==12.0.0
