@@ -85,7 +85,9 @@ class Telegram:
                 try:
                     if chat != str(self.state["chat_id"] or ""):
                         parts = text.split()
-                        if parts[0].lower().startswith("/pair") and pair_code and len(parts) > 1 and hmac.compare_digest(parts[1], pair_code):
+                        # the code works once: after a chat is paired nobody else can take the bot over
+                        if (not self.state["chat_id"] and parts[0].lower().startswith("/pair") and pair_code
+                                and len(parts) > 1 and hmac.compare_digest(parts[1], pair_code)):
                             self.state["chat_id"] = chat
                             self.state.save()
                             await self.send("✅ Paired. This chat now controls the robot.\n\n" + HELP + "\n\n" + await bot.status())
