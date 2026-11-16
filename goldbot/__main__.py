@@ -128,13 +128,36 @@ async def trade_loop(bot: Bot) -> None:
             await asyncio.sleep(15)
 
 
+def _chat_from_old_copier(data_dir: Path) -> str:
+    """The Telegram chat paired with the earlier copier on the same volume, if any."""
+    import sqlite3
+
+    for name in ("copyfactory_v4.db", "copier.db"):
+        path = data_dir / name
+        if not path.exists():
+            continue
+        try:
+            with sqlite3.connect(f"file:{path}?mode=ro", uri=True) as conn:
+                for table in ("kv", "auth"):
+                    try:
+                        row = conn.execute(f"SELECT value FROM {table} WHERE key='telegram_chat_id'").fetchone()
+                    except sqlite3.Error:
+                        continue
+                    if row and str(row[0]).lstrip("-").isdigit():
+                        return str(row[0])
+        except sqlite3.Error:
+            continue
+    return ""
+
+
 async def main() -> None:
     logging.basicConfig(level=env("LOG_LEVEL", "INFO"), format="%(asctime)s %(levelname)s %(name)s %(message)s", stream=sys.stdout)
     logging.getLogger("aiohttp").setLevel(logging.WARNING)
     data_dir = Path(env("DATA_DIR") or ("/data" if os.path.isdir("/data") else "./data"))
     state = State(data_dir / "goldbot_state.json")
-    if env("TELEGRAM_CHAT_ID") and not state["chat_id"]:
-        state["chat_id"] = env("TELEGRAM_CHAT_ID")
+    if not state["chat_id"]:
+        state["chat_id"] = env("TELEGRAM_CHAT_ID") or _chat_from_old_copier(data_dir)
+        state.save()
     telegram = Telegram(env("TELEGRAM_BOT_TOKEN"), state)
     token = env("METAAPI_TOKEN")
     api = MetaApi(token, env("METAAPI_ACCOUNT_ID") or env("METAAPI_TARGET_ACCOUNT_ID")) if token else None
