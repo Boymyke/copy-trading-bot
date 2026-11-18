@@ -1,3 +1,13 @@
+# Free option: Breakout6H inside MetaTrader 5 (no server, no MetaApi)
+
+`mt5/Breakout6H.mq5` is the same robot as an MT5 Expert Advisor. It runs in
+the MT5 app on your own computer, so it costs nothing. Use the Strategy Tester
+to test it on history and a free demo account to test it live. Trades are sent
+to the MT5 phone app as push notifications and written to
+`MQL5\Files\Breakout6H_journal.csv`. Size is set by `RiskPercent` (default 1%
+of balance lost at the stop); a trade is skipped if the smallest lot would risk
+more than `MaxRiskPercent`.
+
 # GoldBot — 6-hour breakout robot for gold (Railway + MetaApi + Telegram)
 
 ```
